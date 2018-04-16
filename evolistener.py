@@ -12,7 +12,7 @@
 # Messages are interpreted and then posted to an mqtt broker if an MQTT broker is defined in the configuration.
 #
 # CREDITS:  
-# Code here is significntly based on the Domitcz source, specifically the EvohomeRadio.cpp file, by 
+# Code here is significantly based on the Domitcz source, specifically the EvohomeRadio.cpp file, by 
 # fulltalgoRythm - https://github.com/domoticz/domoticz/blob/development/hardware/EvohomeRadio.cpp
 # Also see http://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80 
 # for info and discussions on homebrew hardware options.
@@ -97,7 +97,7 @@ class Message(): # Using this more to have a C type struct for passing the messa
     self.payloadLength= int(rawmsg[46:49])          # Note this is not HEX...
     self.payload      = rawmsg[50:]
 
-    self.failedDecrypt= not ("_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg) 
+    self.failedDecrypt= "_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg
 
 #-------------------------------------------- General Functions  -----------------------------------
 def sigHandler(signum, frame):              # Trap Ctl C
