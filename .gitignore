@@ -1,0 +1,7 @@
+*log
+*log.*
+*.old.*
+bak_*
+old_*
+*.pyc
+

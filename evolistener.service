@@ -1,0 +1,16 @@
+[Unit]
+Description=Evohome Listener (Python) 
+After=syslog.target
+
+[Service]
+Type=simple
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=evolistener
+User=root
+WorkingDirectory=/opt/_scripts/evohome/controller
+ExecStart=/usr/bin/python /opt/_scripts/evohome/controller/evolistener.py --log /var/log/evolistener.log 
+Restart=always
+RestartSec=10
+KillMode=process
+
