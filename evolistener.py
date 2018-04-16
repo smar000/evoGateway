@@ -1,7 +1,7 @@
 # Evohome Listener
 # Copyright (c) 2018 SMAR info@smar.co.uk
 #  
-# Tested with Python 2.7.12 Requires:
+# Tested with Python 2.7.12. Requires:
 # - pyserial (python -m pip install pyserial)
 # - paho (pip install paho-mqtt)
 #
@@ -227,11 +227,11 @@ def setpoint_override(msg):
       dtmDay = int(dtmHex[4:6],16)
       dtmMonth = int(dtmHex[6:8],16)
       dtmYear = int(dtmHex[8:12],16)
-      dtm = datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
-      until = "[Until " + str(dtm) + "]"
+      dtm = datetime.datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
+      until = " - Until " + str(dtm)
     else:
       until =""
-    display("SETPOINT_OVERRIDE: " + msg.source + str(newSetPoint) + " (Id = " + str(zoneId) + ") " + until)
+    display("SETPOINT_OVERRIDE   : " + '{0: <22}'.format(msg.source) + '{:>5}'.format(str(newSetPoint)) + "  [Zone " + str(zoneId) + "] " + until)
     # postToMqtt(msg.source, "setpoint",newSetPoint)  #Don't post this yet. Messages currently only from controller. Need to interpret destination device - in fact, dest device should respond with new setpoint anyway
 
 #--------------------------------------------
@@ -285,7 +285,7 @@ def relay_heat_demand(msg):
       topic = "RLY " + deviceType
 
     demandPercentage = float(demand)/200*100
-    display("HEAT_DEMAND_RELAY   : " + msg.source + "{0: >5}".format(str(demandPercentage) + "%") + " [Relay: '" + deviceType +"']" )
+    display("HEAT_DEMAND_RELAY   : " + msg.source + "{0: >5}".format(str(demandPercentage)) + "%" + " [Relay: '" + deviceType +"']" )
     postToMqtt(topic,"heat_demand",demandPercentage)
     
 #--------------------------------------------
@@ -576,7 +576,7 @@ while serialPort.is_open:
               COMMANDS[msg.command](msg)
               log('{0: <18}'.format(msg.commandName) + " " + data) 
             except Exception as e:
-              display(str(e) + ": " + data)
+              display(repor(e) + ": " + data)
 
           else:
             display(msg.source + ": UNKNOWN COMMAND: " + msg.command + ". MSG: " + data)
