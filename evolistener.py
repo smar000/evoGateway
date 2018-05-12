@@ -12,7 +12,7 @@
 # Messages are interpreted and then posted to an mqtt broker if an MQTT broker is defined in the configuration.
 #
 # CREDITS:  
-# Code here is significantly based on the Domitcz source, specifically the EvohomeRadio.cpp file, by 
+# Code here is significntly based on the Domitcz source, specifically the EvohomeRadio.cpp file, by 
 # fulltalgoRythm - https://github.com/domoticz/domoticz/blob/development/hardware/EvohomeRadio.cpp
 # Also see http://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80 
 # for info and discussions on homebrew hardware options.
@@ -50,7 +50,7 @@ import json
 os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "0.8.1"
+VERSION         = "0.8.5"
 CONFIG_FILE     = "evolistener.cfg"
 
 #------------------------------------- Configs/Default ---------------------------------------------# 
@@ -81,6 +81,10 @@ MQTT_TOPIC_BASE  = getConfig(config,"MQTT","MQTT_TOPIC","evohome/listener")   # 
 MQTT_USER        = getConfig(config,"MQTT","MQTT_USER","") 
 MQTT_PW          = getConfig(config,"MQTT","MQTT_PW","") 
 MQTT_CLIENTID    = getConfig(config,"MQTT","MQTT_SERVER","evoListener")
+
+#---------------------------------------- 
+CONTROLLER_MODES = {0: "Auto", 2: "Eco-Auto", 3: "Away", 4: "Day Off",7:"Custom", 1: "Heating Off"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
+
 
 #-------------------------------------------- Classes           -----------------------------------
 
@@ -130,7 +134,7 @@ def toSnake(name):
   return s2.replace("__","_")
 
 #--------------------------------------------
-def display(displayMessage):
+def display(source="-", displayMessage=""):
   try:
     global eventfile
     if os.path.getsize(EVENTS_FILE) > 5000000:
@@ -138,10 +142,10 @@ def display(displayMessage):
       rotateFiles(EVENTS_FILE)
       eventfile = open(EVENTS_FILE,"a")
 
-    print (datetime.datetime.now().strftime("%Y-%m-%d %X") + ": " + str(displayMessage))
-    eventfile.write(datetime.datetime.now().strftime("%Y-%m-%d %X") + ": " + str(displayMessage).strip() + "\n")
+    print (datetime.datetime.now().strftime("%Y-%m-%d %X") + ": " + "{:<20}".format(str(source)) + ": " + str(displayMessage))
+    eventfile.write(datetime.datetime.now().strftime("%Y-%m-%d %X") +  " {:<20}".format(str(source)) + ": " + str(displayMessage).strip() + "\n")
     file.flush(eventfile)
-  except e as Exception:
+  except Exception as e:
     print (str(e))
     pass
 
@@ -175,23 +179,23 @@ def toCamelCase(s):
 #-------------------------------------------- Evohome Commands Functions ------------------------------------
 
 def bind(msg):
-  # display ("BIND command received")
+  # display (msg.commandName, "BIND command received")
   pass
 
 #--------------------------------------------
 def sync(msg):
-  # display("SYNC command received")
+  # display(msg.commandName,"SYNC command received")
   pass
 
 #--------------------------------------------
 def zone_name(msg):
-  # display("NAME request received")
+  # display(msg.commandName,"NAME request received")
   pass
 
 #--------------------------------------------
 def setpoint(msg):
   if msg.payloadLength % 3 != 0:
-    display("SETPOINT_STATUS     : " + msg.source + " - command error - invalid length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + " - command error - invalid length: " + msg.rawmsg)
   else:
     i = 0
     while (i < msg.payloadLength):
@@ -203,20 +207,21 @@ def setpoint(msg):
         else:
           zone_name = "Zone " + str(zoneId)
         zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
-        display("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]")
+        display(msg.commandName,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]")
         postToMqtt(zone_name, "setpoint",zoneSetPoint)
         # log("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + str(zoneSetPoint) + " [Zone " + str(zoneId) + "]")
-      except Exception as e:
-        display("SETPOINT_STATUS     : " +  msg.source + "Error decoding setpoint status data for zone " + str(zoneId) + ". Zone data is " + zoneData + " MSG: " + msg.rawmsg)        
+      except:
+        display(msg.commandName, msg.source + "Error decoding setpoint status data for zone " + str(zoneId) + ". Zone data is " + zoneData + " MSG: " + msg.rawmsg)        
       i += 6                          
 
 
 #--------------------------------------------
 def setpoint_override(msg):
   if msg.payloadLength != 7 and msg.payloadLength != 13:
-    display(msg.source + ": Setpoint command error - invalid length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": ERROR - invalid length: " + msg.rawmsg)
   else:
     zoneId = int(msg.payload[0:2],16) +1
+    zone_name = zones[zoneId]
     newSetPoint = float(int(msg.payload[2:4],16) << 8 | int(msg.payload [4:6],16))/100
 
     #!!TODO!! Trap for 0x7FFF - this means setpoint not set
@@ -229,42 +234,57 @@ def setpoint_override(msg):
       dtmYear = int(dtmHex[8:12],16)
       dtm = datetime.datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
       until = " - Until " + str(dtm)
+      postToMqtt(zone_name, "scheduleMode", "Temporary")
+      postToMqtt(zone_name, "scheduleModeUntil", str(dtm))
     else:
       until =""
-    display("SETPOINT_OVERRIDE   : " + '{0: <22}'.format(msg.source) + '{:>5}'.format(str(newSetPoint)) + "  [Zone " + str(zoneId) + "] " + until)
-    # postToMqtt(msg.source, "setpoint",newSetPoint)  #Don't post this yet. Messages currently only from controller. Need to interpret destination device - in fact, dest device should respond with new setpoint anyway
+      postToMqtt(zone_name, "scheduleMode", "Scheduled")
+      postToMqtt(zone_name, "scheduleModeUntil", "")
+    display(msg.commandName, '{0: <22}'.format(msg.source) + '{:>5}'.format(str(newSetPoint)) + "  [Zone " + str(zoneId) + "] " + until)
+    postToMqtt(zone_name, "setpointOverride",newSetPoint)
+
 
 #--------------------------------------------
 def zone_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
-  display("TEMPERATURE         : " + msg.source + ("%6.2f" % temperature))
+  display(msg.commandName, msg.source + ("%6.2f" % temperature))
   postToMqtt(msg.source, "temperature",temperature)
   
 #--------------------------------------------
 def window_status(msg):
   if msg.payloadLength < 3:
-    display(msg.source + ": Window Status - invalid msg.payload length (" + msg.payloadLength + "): " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": Error - invalid msg.payload length (" + msg.payloadLength + "): " + msg.rawmsg)
   else:
     # Zone is first 2, then window status. 3rd pair seems to be always zero apparently
     zoneId = int(msg.payload[0:2],16) 
-    status = int(msg.payload[2:4],16)
+    statusId = int(msg.payload[2:4],16)
     misc = int(msg.payload[4:6],16)
 
-  display("WINDOW_STATUS       : " + msg.source + "Status: " + str(status) + ", Misc: " + str(misc) + " [Zone " + str(zoneId) + "]")
+    if zoneId <12:
+      zoneId += 1
+    
+    if statusId == 0:
+      status = "CLOSED"
+    elif statusId == 0xC8:
+      status = "OPEN"
+    else:
+      status = "Unknown (" + str(statusId) + ")"
+
+  display(msg.commandName, '{0: <22}'.format(msg.source) + '{:<6}'.format(status) + " [Zone " + str(zoneId) + "] (Misc: " + str(misc) + ")")
   postToMqtt(msg.source,"window_status",status)
 
 #--------------------------------------------
 def other_command(msg):
-  display("UNKNOWN_ZONE        : " + msg.source + " - " + ". MSG: " + msg.rawmsg)
+  display(msg.commandName, msg.source + " - " + ". MSG: " + msg.rawmsg)
 
 #--------------------------------------------
 def date_request(msg):
-  display("DATE_REQUEST       : " + msg.source + " - " + ". MSG: " + msg.rawmsg)
+  display(msg.commandName, msg.source + " - " + ". MSG: " + msg.rawmsg)
 
 #--------------------------------------------
 def relay_heat_demand(msg):
   if msg.payloadLength != 2:
-    display(msg.source + ": Heat demand (relay) - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
   else:
     typeId = int(msg.payload[0:2],16)
     demand = int(msg.payload[2:4],16)
@@ -285,13 +305,13 @@ def relay_heat_demand(msg):
       topic = "RLY " + deviceType
 
     demandPercentage = float(demand)/200*100
-    display("HEAT_DEMAND_RELAY   : " + msg.source + "{0: >5}".format(str(demandPercentage)) + "%" + " [Relay: '" + deviceType +"']" )
+    display(msg.commandName, msg.source + "{0: >5}".format(str(demandPercentage)) + "%" + " [Relay: '" + deviceType +"']" )
     postToMqtt(topic,"heat_demand",demandPercentage)
     
 #--------------------------------------------
 def zone_heat_demand(msg):
   if msg.payloadLength != 2:
-    display(msg.source + ": Heat demand (zone) - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
   else:
     zoneId = int(msg.payload[0:2],16) 
     demand = int(msg.payload[2:4],16)
@@ -313,7 +333,7 @@ def zone_heat_demand(msg):
       topic = msg.source
 
     demandPercentage = float(demand)/200*100
-    display("HEAT_DEMAND_ZONE    : " + msg.source + "{0: >5}".format(str(demandPercentage)) + "% [Zone: " + str(zoneId) + "]")
+    display(msg.commandName, msg.source + "{0: >5}".format(str(demandPercentage)) + "% [Zone " + str(zoneId) + "]")
     postToMqtt(topic,"heat_demand",demandPercentage)
 
 #--------------------------------------------
@@ -321,7 +341,7 @@ def actuator_check_req(msg):
   # this is used to synchronise time periods for each relay bound to a controller 
   # i.e. all relays get this message and use it to determine when to start each cycle (demand is just a % of the cycle length)
   if msg.payloadLength != 2:
-    display("ACTUATOR_CHECK      : " + msg.source + ": Error decoding Actuator Check - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": Error decoding Actuator Check - invalid msg.payload length: " + msg.rawmsg)
   else:
     deviceNo = int(msg.payload[0:2],16) 
     demand = int(msg.payload[2:4],16)
@@ -329,32 +349,32 @@ def actuator_check_req(msg):
       deviceType = "Broadcast Request"
     else:
       deviceType =""
-    display("ACTUATOR_CHECK      : " + msg.source + str(demand) + " (" + deviceType + ")")
+    display(msg.commandName, msg.source + str(demand) + " (" + deviceType + ")")
 
     
 #--------------------------------------------
 def actuator_state(msg):
   if msg.payloadLength == 1 and msg.msgType == "RQ":
-    display("ACTUATOR_STATUS     : Request from " + msg.source + " to " + msg.device2)
+    display(msg.commandName, "Request from " + msg.source + " to " + msg.device2)
   elif msg.payloadLength != 3:
-    display("ACTUATOR_STATUS     : " + msg.source + ": Decoding error - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
   else:
     deviceNo = int(msg.payload[0:2],16) # Apparently this is always 0 and so invalid
     demand = int(msg.payload[2:4],16)   # (0 for off or 0xc8 i.e. 100% for on)
 
     if demand == 0xc8: 
-      status = "On"
+      status = "ON"
     elif demand == 0:
-      status ="Off"
+      status ="OFF"
     else:
       status = "Unknown: " + str(demand)
-    display("ACTUATOR_STATUS     : " + msg.source + status)
-    postToMqtt(msg.source,"actuator_status",demand)
+    display(msg.commandName, msg.source + status)
+    postToMqtt(msg.source,"actuator_status",status)
 
 #--------------------------------------------
 def dhw_status(msg):
   if not( msg.payloadLength ==6 or msg.payloadLength == 12) :
-    display("DHW_STATE           : " + msg.source + ": Decoding error - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
   else:
     zoneId = int(msg.payload[0:2],16)   # Apparently this is always 0 for controller?
     stateId = int(msg.payload[2:4],16)    # 0 or 1 for DHW on/off, or 0xFF if not installed
@@ -383,15 +403,15 @@ def dhw_status(msg):
       dtmDay = int(dtmHex[4:6],16)
       dtmMonth = int(dtmHex[6:8],16)
       dtmYear = int(dtmHex[8:12],16)
-      dtm = datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
+      dtm = datetime.datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
       until = " [Until " + str(dtm) + "]"
     else:
       until =""
 
     if stateId == 0xFF:
-      display("DHW_STATE           : " + msg.source + " DHW not installed")      
+      display(msg.commandName, msg.source + " DHW not installed")      
     else:   
-      display("DHW_STATE           : " + msg.source + "[ZoneID " + str(zoneId) + "] State: " + state + ", mode: " + mode + until )
+      display(msg.commandName, msg.source + "[ZoneID " + str(zoneId) + "] State: " + state + ", mode: " + mode + until )
       postToMqtt("DHW","state",stateId)
       postToMqtt("DHW","mode",mode)
       if until >"":        
@@ -402,23 +422,23 @@ def dhw_status(msg):
 #--------------------------------------------
 def dhw_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
-  display("DHW_TEMPERATURE     : " + msg.source + " - " + str(temperature))
+  display(msg.commandName, msg.source + ("%6.2f" % temperature))
   postToMqtt("DHW", "temperature", temperature)
 
 #--------------------------------------------
 def zone_info(msg):
-  # display("ZONE_INFO           : " + msg.source + " - MSG: " + msg.rawmsg)
+  # display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
   pass
 
 #--------------------------------------------
 def device_info(msg):
-  #display("DEVICE_INFO         : " + msg.source + " - MSG: " + msg.rawmsg)
+  #display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
   pass
 
 #--------------------------------------------
 def battery_info(msg):
   if msg.payloadLength != 3:
-    display("BATTERY_INFO        : " + msg.source + ": Decoding error - invalid msg.payload length: " + msg.rawmsg)
+    display(msg.commandName, msg.source + ": Decoding error - invalid msg.payload length: " + msg.rawmsg)
   else:
     deviceID = int(msg.payload[0:2],16)   
     battery = int(msg.payload[2:4],16)    
@@ -429,26 +449,55 @@ def battery_info(msg):
     else:
       battery = battery / 2  #recode battery level values to 0-100 from original 0-200 values
     
-    # if(lowBattery == 0):    #TODO... Need to check this to understand how it is used.
-    #   battery = 0
+    if(lowBattery != 0):    #TODO... Need to check this to understand how it is used.
+      warning = " - LOW BATTERY WARNING"
+    else:
+      warning = ""
 
-    display("BATTERY_INFO        : " + msg.source + "Battery: " + str(battery) + "%, lowBattery: " + str(lowBattery) + ", deviceID: " + str(deviceID) + " - MSG: " + msg.rawmsg)
-    
+    display(msg.commandName, msg.source + '{:>5}'.format(str(battery)) + "%" + warning)
+    postToMqtt(msg.source,"battery",battery)
+
 #--------------------------------------------
 def controller_mode(msg):
-  display("CONTROLLER_MODE     : " + msg.source + " - MSG: " + msg.rawmsg)
+  if msg.payloadLength != 8:
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
+  else:
+    modeId = int(msg.payload[0:2],16)   
+    try:
+      mode = CONTROLLER_MODES[modeId] 
+    except:
+      mode="Unknown (" + str(modeId) + ")"
+    durationCode = int(msg.payload[14:16],16) # 0 = Permanent, 1 = temporary
+    print("modeId " + str(modeId) + " duration code: " + str(durationCode))
+    
+    if durationCode == 1:
+      dtmHex=msg.payload[2:14]
+      dtmMins = int(dtmHex[0:2],16)
+      dtmHours = int(dtmHex[2:4],16)
+      dtmDay = int(dtmHex[4:6],16)
+      dtmMonth = int(dtmHex[6:8],16)
+      dtmYear = int(dtmHex[8:12],16)
+      dtm = datetime.datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
+      until = " [Until " + str(dtm) + "]"
+    else:
+      if modeId != 0:
+        until =" - PERMANENT" 
+      else:
+        until =""
+    display(msg.commandName, msg.source + mode + " mode" + until)
+    postToMqtt(msg.source,"mode",mode)
 
 #--------------------------------------------
 def sys_info(msg):
-  display("SYS_INFO            : " + msg.source + " - MSG: " + msg.rawmsg)
+  display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
 
 #--------------------------------------------
 def external_sensor(msg):
-  display("EXTERNAL_SENSOR     : " + msg.source + " - MSG: " + msg.rawmsg)
+  display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
 
 #--------------------------------------------
-def uknownCommand(msg):
-  display("UNKNOWN_COMMAND     : " + msg.source + " - MSG: " + msg.rawmsg)
+def unknown_command(msg):
+  display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
 
 #-------------------------------------------- Evohome Commands Dict
 COMMANDS = {
@@ -500,19 +549,19 @@ while (COM_RETRY_LIMIT > 0 and not comConnected):
     comConnected = True
   except Exception as e:
     if COM_RETRY_LIMIT >1:
-      display(str(e) + ". Retrying in 5 seconds")
+      display("COM_PORT ERROR",repr(e) + ". Retrying in 5 seconds")
       time.sleep(5)
       COM_RETRY_LIMIT -= 1
     else:
-      display("Error connecting to COM port " + COM_PORT + ". Giving up...")
+      display("COM_PORT ERROR","Error connecting to COM port " + COM_PORT + ". Giving up...")
 
 if not comConnected:
   sys.exit()
 
 
-display("\n")
-display("Evohome listener version " + VERSION )
-display("Connected to COM port " + COM_PORT)  
+display("","\n")
+display("","Evohome listener version " + VERSION )
+display("","Connected to COM port " + COM_PORT)  
 
 logfile.write("")
 logfile.write("-----------------------------------------------------------\n")
@@ -529,16 +578,16 @@ for d in devices:
     zones[devices[d]["zoneId"]] = devices[d]["name"]
 # print (zones)
 
-display('')
-display('-----------------------------------------------------------')
-display("Devices loaded from '" + DEVICES_FILE + "' file:")
+display('','')
+display('','-----------------------------------------------------------')
+display('',"Devices loaded from '" + DEVICES_FILE + "' file:")
 for key in sorted(devices):
   zm = " [Master]" if devices[key]['zoneMaster'] else ""
-  display('   ' + key + " - " + '{0: <22}'.format(devices[key]['name']) + " - Zone " + '{0: <3}'.format(devices[key]['zoneId']) + zm )
+  display('','   ' + key + " - " + '{0: <22}'.format(devices[key]['name']) + " - Zone " + '{0: <3}'.format(devices[key]['zoneId']) + zm )
 
-display('-----------------------------------------------------------')
-display('')
-display('Listening...')
+display('','-----------------------------------------------------------')
+display('','')
+display('','Listening...')
 
 file.flush(logfile)
 
@@ -556,13 +605,13 @@ while serialPort.is_open:
 
           # Check if device is known...
           if not msg.source in devices:
-            display("NEW DEVICE: " + msg.source)
+            display("NEW DEVICE FOUND", msg.source)
             devices.update({msg.source : {"name" : msg.source, "zoneId" : -1, "zoneMaster" : False  }})
             with open(NEW_DEVICES_FILE,'w') as fp:
               fp.write(json.dumps(devices, sort_keys=True, indent=4))
             fp.close()
           else:
-            if msg.source[0:2]=="01" and msg.destination[0:2]=="01": # Controller broadcast message - note dev2 is not always used
+            if msg.source[0:2]=="01" and msg.destination[0:2]=="01": # Controller broadcast message I think 
               msg.source="CONTROLLER"
 
             if msg.source != "CONTROLLER" and devices[msg.source]['name'] > "":
@@ -576,25 +625,27 @@ while serialPort.is_open:
               COMMANDS[msg.command](msg)
               log('{0: <18}'.format(msg.commandName) + " " + data) 
             except Exception as e:
-              display(repor(e) + ": " + data)
+              display("ERROR",msg.commandName + ": " + repr(e) + ": " + data)
 
           else:
-            display(msg.source + ": UNKNOWN COMMAND: " + msg.command + ". MSG: " + data)
+            display("UNKNOWN COMMAND", msg.source + ": Command code '" + msg.command + "'. MSG: " + data.strip())
             log("UNKNOWN COMMAND: " + data)
-          file.flush(logfile)
         else:
-          display("--- Message dropped: packet error from hardware/firmware")
+          display("ERROR","--- Message dropped: packet error from hardware/firmware")
+          log(data)
+
+        file.flush(logfile)
 
   except KeyboardInterrupt:
     if serialPort.is_open:
       serialPort.close()                   
     comConnected = False
 
-  except Exception as e:
-    if serialPort.is_open:
-      serialPort.close()
-    print ("Evohome listener stopped")                   
-    pass
+  # except Exception as e:
+  #   if serialPort.is_open:
+  #     serialPort.close()
+  #   print ("Evohome listener stopped")                   
+  #   pass
 
 
 
