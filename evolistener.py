@@ -207,7 +207,13 @@ def setpoint(msg):
         else:
           zone_name = "Zone " + str(zoneId)
         zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
-        display(msg.commandName,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]")
+        if (zoneSetPoint == 325.11): # This seems to be the number sent when TRV manually switched to OFF
+          zoneSetpoint = 0 
+          flag = " *(Heating is OFF)"
+        else:
+          flag = ""
+
+        display(msg.commandName,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]" + flag)
         postToMqtt(zone_name, "setpoint",zoneSetPoint)
         # log("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + str(zoneSetPoint) + " [Zone " + str(zoneId) + "]")
       except:
@@ -385,9 +391,9 @@ def dhw_status(msg):
     elif stateId == 1:
       state = "On"
     elif stateId == 0:
-      state == "Off"
+      state = "Off"
     else:
-      state =="Uknown state: " + str(stateId)
+      state ="Unknown state: " + str(stateId)
 
     if modeId == 0:
       mode="Auto"
