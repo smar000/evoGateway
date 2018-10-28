@@ -208,7 +208,7 @@ def setpoint(msg):
           zone_name = "Zone " + str(zoneId)
         zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
         if (zoneSetPoint == 325.11): # This seems to be the number sent when TRV manually switched to OFF
-          zoneSetpoint = 0 
+          zoneSetPoint = 0
           flag = " *(Heating is OFF)"
         else:
           flag = ""
