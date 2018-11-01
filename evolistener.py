@@ -82,23 +82,38 @@ MQTT_USER        = getConfig(config,"MQTT","MQTT_USER","")
 MQTT_PW          = getConfig(config,"MQTT","MQTT_PW","") 
 MQTT_CLIENTID    = getConfig(config,"MQTT","MQTT_SERVER","evoListener")
 
+MAX_LOG_HISTORY  = 5
+
 #---------------------------------------- 
 CONTROLLER_MODES = {0: "Auto", 2: "Eco-Auto", 3: "Away", 4: "Day Off",7:"Custom", 1: "Heating Off"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
-
+DEV_TYPE_CONTROLLER = "01"
+DEV_TYPE_UFH        = "02"
+DEV_TYPE_TRV        = "04"
+DEV_TYPE_DHWSENDER  = "07"
+DEV_TYPE_RELAY      = "13"
+DEV_TYPE_THERMOSTAT = "34"
 
 #-------------------------------------------- Classes           -----------------------------------
 
 class Message(): # Using this more to have a C type struct for passing the message around than anything else at this stage
   def __init__(self,rawmsg):
     self.rawmsg       = rawmsg.strip()
+    self.sourceId     = rawmsg[11:20] 
 
     self.msgType      = rawmsg[4:6] 
-    self.source       = rawmsg[11:20]               # device 1 - This looks as if this is always the source
+    self.source       = rawmsg[11:20]               # device 1 - This looks as if this is always the source; Note this is overwritten with name of device 
+    self.sourceType   = rawmsg[11:13]                # the first 2 digits seem to be identifier for type of device
     self.device2      = rawmsg[21:30]               # device 2 - seen this on actuactor check requests only so far (TODO!! Look into this further at some stage)
+    self.device2Type  = rawmsg[21:23]               # device 2 type
     self.destination  = rawmsg[31:40]               # device 3 - Looks as if this is always the destination
+    self.destinationType = rawmsg[31:33]
     self.command      = rawmsg[41:45].upper()       # command code hx
     self.commandName  = self.command                # needs to be assigned outside, as we are doing all the processing outside of this class/struct
-    self.payloadLength= int(rawmsg[46:49])          # Note this is not HEX...
+    try:
+      self.payloadLength= int(rawmsg[46:49])          # Note this is not HEX...
+    except Exception as e:
+      print (str(e))
+      self.payloadLength=0
     self.payload      = rawmsg[50:]
 
     self.failedDecrypt= "_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg
@@ -113,12 +128,25 @@ def sigHandler(signum, frame):              # Trap Ctl C
 #--------------------------------------------
 def rotateFiles(baseFileName):
   # try:
-    if os.path.isfile(baseFileName + ".2"):
-      os.remove(baseFileName + ".2")
-    if os.path.isfile(baseFileName + ".1"):
-      os.rename(baseFileName + ".1", baseFileName + ".2")
-    if os.path.isfile(baseFileName):
-      os.rename(baseFileName, baseFileName + ".1")
+    if os.path.isfile(baseFileName + "." + str(MAX_LOG_HISTORY)):
+      os.remove(baseFileName + "." + str(MAX_LOG_HISTORY))
+
+    i = MAX_LOG_HISTORY - 1
+    while i > 0:
+      if i>1:
+        orgFileExt = "." + str(i)
+      else:
+        orgFileExt =""
+      if os.path.isfile(baseFileName + orgFileExt):
+        os.rename(baseFileName + orgFileExt, baseFileName + "." + str(i + 1))
+      i -= 1
+
+    # if os.path.isfile(baseFileName + ".2"):
+    #   os.remove(baseFileName + ".2")
+    # if os.path.isfile(baseFileName + ".1"):
+    #   os.rename(baseFileName + ".1", baseFileName + ".2")
+    # if os.path.isfile(baseFileName):
+    #   os.rename(baseFileName, baseFileName + ".1")
   # except Exception as e:
   #   print ("Error rotating base file '" + baseFileName + "'")
   #   print (str(e))
@@ -193,31 +221,67 @@ def zone_name(msg):
   pass
 
 #--------------------------------------------
+def setpoint_ufh(msg):
+  # Not 100% sure what this command is. First 2 digits seem to be ufh controller zone, followed by 4 digits which appear to be for the 
+  # zone's setpoint, then 0A2801. 
+  # Pattern is repeated with any other zones that the ufh controller may have.
+
+ 
+  i = 0
+  while (i < (msg.payloadLength *2)):
+    # try:
+      zoneId = int(msg.payload[0+i:2+i],16) # We add 900 to identify UFH zone numbers
+      zoneSetpoint = float(int(msg.payload[2+i:6+i],16))/100
+      zone_name =""
+      for d in devices:
+        if devices[d].get('ufh_zoneId') and zoneId == devices[d]['ufh_zoneId']:
+          zoneId = devices[d]["zoneId"]
+          zone_name = devices[d]["name"]
+          break
+      if zone_name == "":
+        display("DEBUG","UFH Setpoint Zone " + str(zoneId) + " name not found")    
+        zone_name = "UFH Zone " + str(zoneId)
+
+      display(msg.commandName,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetpoint)) + "  [Zone UFH " + str(zoneId) + "]")
+      postToMqtt(zone_name, "setpoint",zoneSetpoint)
+
+      i += 12
+    # except:
+    #   display(msg.commandName, msg.source + "Error decoding UFH zone heat demand data for device " + msg.source + ". MSG: " + msg.rawmsg)        
+
+
+
+#--------------------------------------------
 def setpoint(msg):
   if msg.payloadLength % 3 != 0:
     display(msg.commandName, msg.source + " - command error - invalid length: " + msg.rawmsg)
   else:
+    cmdNameSuffix =""
+    if msg.payloadLength > 3:
+        cmdNameSuffix = "_CTL"
     i = 0
     while (i < msg.payloadLength):
-      try:
-        zoneData = msg.payload[i:i+6]
-        zoneId = int(zoneData[0:2],16) + 1 #Zone number
-        if zoneId >= 0 and zoneId in zones:
-          zone_name = zones[zoneId]
-        else:
-          zone_name = "Zone " + str(zoneId)
-        zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
-        if (zoneSetPoint == 325.11): # This seems to be the number sent when TRV manually switched to OFF
-          zoneSetpoint = 0 
-          flag = " *(Heating is OFF)"
-        else:
-          flag = ""
+      zoneData = msg.payload[i:i+6]
+      zoneId = int(zoneData[0:2],16) + 1 #Zone number
+      if zoneId >= 0 and zoneId in zones:
+        zone_name = zones[zoneId]
+      else:
+        zone_name = "Zone " + str(zoneId)
+        display("DEBUG","Setpoint: zone not found for zoneId " + str(zoneId) + ", MSG: " + msg.rawmsg)
+      zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
+      if (zoneSetPoint == 325.11): # This seems to be the number sent when TRV manually switched to OFF
+        zoneSetpoint = 0 
+        flag = " *(Heating is OFF)"
+      else:
+        flag = ""
 
-        display(msg.commandName,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]" + flag)
-        postToMqtt(zone_name, "setpoint",zoneSetPoint)
-        # log("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + str(zoneSetPoint) + " [Zone " + str(zoneId) + "]")
-      except:
-        display(msg.commandName, msg.source + "Error decoding setpoint status data for zone " + str(zoneId) + ". Zone data is " + zoneData + " MSG: " + msg.rawmsg)        
+      display(msg.commandName + cmdNameSuffix,'{0: <22}'.format(zone_name) + '{:>5}'.format(str(zoneSetPoint)) + "  [Zone " + str(zoneId) + "]" + flag)
+      # if cmdNameSuffix == "": # Use controller value as main setpoint as it controls the boiler... there is sometimes a difference between the controller and actual device
+      postToMqtt(zone_name, "setpoint" + cmdNameSuffix,zoneSetPoint)
+      # else:
+      #   postToMqtt(zone_name, "setpoint_ondevice",zoneSetPoint)
+
+      # log("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + str(zoneSetPoint) + " [Zone " + str(zoneId) + "]")
       i += 6                          
 
 
@@ -241,7 +305,7 @@ def setpoint_override(msg):
       dtm = datetime.datetime(year=dtmYear,month=dtmMonth, day=dtmDay,hour=dtmHours,minute=dtmMins)
       until = " - Until " + str(dtm)
       postToMqtt(zone_name, "scheduleMode", "Temporary")
-      postToMqtt(zone_name, "scheduleModeUntil", str(dtm))
+      postToMqtt(zone_name, "scheduleModeUntil", dtm.strftime("%Y-%m-%dT%XZ"))
     else:
       until =""
       postToMqtt(zone_name, "scheduleMode", "Scheduled")
@@ -253,7 +317,16 @@ def setpoint_override(msg):
 #--------------------------------------------
 def zone_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
-  display(msg.commandName, msg.source + ("%6.2f" % temperature))
+  zoneId=0
+  if devices.get(msg.sourceId):
+    zoneId = devices[msg.sourceId]['zoneId']
+  else:
+    display("DEBUG","Device not found for source " + msg.sourceId)
+  if zoneId >0:
+    zoneDesc = " [Zone " + str(zoneId) + "]"
+  else:
+    zoneDesc = ""
+  display(msg.commandName, msg.source + ("%6.2f" % temperature) + zoneDesc)
   postToMqtt(msg.source, "temperature",temperature)
   
 #--------------------------------------------
@@ -276,7 +349,11 @@ def window_status(msg):
     else:
       status = "Unknown (" + str(statusId) + ")"
 
-  display(msg.commandName, '{0: <22}'.format(msg.source) + '{:<6}'.format(status) + " [Zone " + str(zoneId) + "] (Misc: " + str(misc) + ")")
+  if misc >0:
+      miscDesc = " (Misc: " + str(misc) + ")"
+  else:
+      miscDesc = ""
+  display(msg.commandName, '{0: <22}'.format(msg.source) + '{:<6}'.format(status) + " [Zone " + str(zoneId) + "]" + miscDesc)
   postToMqtt(msg.source,"window_status",status)
 
 #--------------------------------------------
@@ -297,15 +374,21 @@ def relay_heat_demand(msg):
     if typeId <12:
       typeId +=1
 
-    if typeId == 0xfc:    # Boiler relay or possibly broadcast
+    if msg.sourceType == DEV_TYPE_UFH:
+      deviceType = "UFH"
+      topic="RLY UFH"      
+    elif typeId == 0xfa:  # Depends on whether it is main controller sending message, or UFH controller
+      deviceType = "DHW"
+      topic="DHW"      
+    elif typeId == 0xfc:    # Boiler relay or possibly broadcast
       deviceType = "Boiler"
       topic = "RLY Boiler"
-    elif typeId == 0xfa:  # DHW zone valve relay
-      deviceType = "DHW"
-      topic="DHW"
-    elif typeId == 0xf9:  # Heating zone valve relay
-      deviceType = "Heating"
+    elif typeId == 0xf9:  # Radiator circuit zone valve relay
+      deviceType = "Radiators"
       topic="RLY Heating"
+    elif typeId == 0xc: # Electric underfloor relay
+    	deviceType = "RLY ELEC UFH"
+    	topic="RLY UFH"
     else:
       deviceType = str(hex(typeId)) 
       topic = "RLY " + deviceType
@@ -316,31 +399,75 @@ def relay_heat_demand(msg):
     
 #--------------------------------------------
 def zone_heat_demand(msg):
-  if msg.payloadLength != 2:
-    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
+  if msg.payloadLength % 2 != 0 :
+    display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + str(msg.rawmsg))
   else:
-    zoneId = int(msg.payload[0:2],16) 
-    demand = int(msg.payload[2:4],16)
+    topic = ""
+    i = 0
+    sourceDevice = msg.source 
+    while (i < (msg.payloadLength *2)):
+      # try:
+        zoneId = int(msg.payload[0+i:2+i],16) 
+        demand = int(msg.payload[2+i:4+i],16)
+        
+        if zoneId <= 12:
+          zoneId += 1     # Normal zones are plus 1
 
-    if zoneId <= 12:
-      zoneId += 1     #if it is a standard zone, we have to add 1 
+        zoneLabel = "Zone"
+        if msg.sourceType == DEV_TYPE_UFH:
+          if msg.source == msg.destination or zoneId == 0xfc: # Messages from the UFH controller to itself seem always to have zone Id 252 (0xfc) - i.e. relay
+            deviceType = "RLY UFH"
+            topic = "RLY UFH"
+          elif zoneId <=8: # 
+            # if destination device is the main touch controller, then then zone Id is that of the matched zone in the main touch controller itself
+            # Otherwise, if the destination device is the ufh controller (i.e. message is to itself/broadcast etc), then the zone Id is the ufh controller zone id (i.e. 1 to 8)
 
-    if zoneId == 0xfc:
-      deviceType = "Boiler Relay"
-      topic = "RLY Boiler"
-    elif zoneId == 0xfa:
-      deviceType = "DHW Relay"
-      topic="DHW"
-    elif zoneId == 0xf9:
-      deviceType = "Heating Relay"  
-      topic="RLY Heating"
-    else:
-      deviceType = str(hex(zoneId))
-      topic = msg.source
+            if msg.destinationType == DEV_TYPE_CONTROLLER:
+              zone_name = zones[zoneId] # get zone name from main controller zones 
+              deviceType = "UFH " + zone_name.split(' ', 1)[1] 
+              sourceDevice = deviceType
+              topic = zone_name
 
-    demandPercentage = float(demand)/200*100
-    display(msg.commandName, msg.source + "{0: >5}".format(str(demandPercentage)) + "% [Zone " + str(zoneId) + "]")
-    postToMqtt(topic,"heat_demand",demandPercentage)
+            elif msg.destinationType == msg.sourceType: # destination should be the ufh controller itself (i.e. message to itlself). zoneId should be ufh zone
+              for d in devices:
+                if devices[d].get('ufh_zoneId') and zoneId == devices[d]['ufh_zoneId']:
+                  # display("DEBUG","UFH Zone matched to " + devices[d]["name"])    
+                  zoneId = devices[d]["zoneId"]
+                  zone_name = devices[d]["name"]
+                  deviceType = "UFH " + zone_name.split(' ', 1)[1] 
+                  topic = zone_name
+                  break
+            else:
+              display("ERROR","UFH message received, but destination is neither main controller nor UFH controller. destination = ", msg.destination + ", destinationType = " + 
+                msg.destinationType + ", MSG: " + msg.rawmsg) 
+          zoneLabel = "UFH Zone"
+        elif zoneId == 0xfc:
+	          deviceType = "Boiler Relay"
+	          topic = "RLY Boiler"
+        elif zoneId == 0xfa:
+          deviceType = "DHW Relay"
+          topic="DHW"
+        elif zoneId == 0xf9:
+          deviceType = "Radiators Relay"  
+          topic="RLY Heating"
+        # elif msg.sourceType == DEV_TYPE_UFH: # TODO.... MAP zones....
+        #   deviceType = "UFH Controller"  
+        #   topic="UFH Zone"   
+        else:
+          deviceType = str(hex(zoneId))
+          topic = msg.source
+
+        demandPercentage = float(demand)/200*100
+        display(msg.commandName, '{0: <22}'.format(sourceDevice) + "{0: >5}".format(str(demandPercentage)) + "% [" + zoneLabel + " " + str(zoneId) + "]")
+        #[DEBUG: payload size: " + str(msg.payloadLength) + ", i=" + str(i) + "]"
+        if len(topic) > 0:
+          postToMqtt(topic,"heat_demand",demandPercentage)
+        else:
+          display("DEBUG", "ERROR: Could not post to MQTT as topic undefined")
+        i += 4
+      # except:
+      #   display(msg.commandName, msg.source + "Error decoding zone heat demand data for device " + msg.source + ". MSG: " + msg.rawmsg)        
+
 
 #--------------------------------------------
 def actuator_check_req(msg):
@@ -352,16 +479,20 @@ def actuator_check_req(msg):
     deviceNo = int(msg.payload[0:2],16) 
     demand = int(msg.payload[2:4],16)
     if deviceNo == 0xfc: # 252 - apparently some sort of broadcast?
-      deviceType = "Broadcast Request"
+      deviceType = " (Status Update Request)"
     else:
       deviceType =""
-    display(msg.commandName, msg.source + str(demand) + " (" + deviceType + ")")
+    display(msg.commandName, msg.source + str(demand) + deviceType)
 
     
 #--------------------------------------------
 def actuator_state(msg):
   if msg.payloadLength == 1 and msg.msgType == "RQ":
-    display(msg.commandName, "Request from " + msg.source + " to " + msg.device2)
+    if msg.device2 in zones:
+      dev2name = zones[msg.device2]
+    else:
+      dev2name = msg.device2
+    display(msg.commandName, "Request from " + msg.source + " to " + dev2name)
   elif msg.payloadLength != 3:
     display(msg.commandName, msg.source + ": ERROR - invalid msg.payload length: " + msg.rawmsg)
   else:
@@ -493,8 +624,9 @@ def controller_mode(msg):
     display(msg.commandName, msg.source + mode + " mode" + until)
     postToMqtt(msg.source,"mode",mode)
 
+
 #--------------------------------------------
-def sys_info(msg):
+def heartbeat(msg):
   display(msg.commandName, msg.source + " - MSG: " + msg.rawmsg)
 
 #--------------------------------------------
@@ -514,12 +646,13 @@ COMMANDS = {
   '0100': other_command,  
   '0418': device_info,
   '1060': battery_info,
-  '10e0': sys_info,
+  '10e0': heartbeat,
   '1260': dhw_temperature,
   '12B0': window_status,
   '1F09': sync,
   '1F41': dhw_status,
   '1FC9': bind,
+  '22C9': setpoint_ufh,
   '2309': setpoint,
   '2349': setpoint_override,
   '2E04': controller_mode,
@@ -617,9 +750,8 @@ while serialPort.is_open:
               fp.write(json.dumps(devices, sort_keys=True, indent=4))
             fp.close()
           else:
-            if msg.source[0:2]=="01" and msg.destination[0:2]=="01": # Controller broadcast message I think 
+            if msg.sourceType == DEV_TYPE_CONTROLLER and msg.destinationType == DEV_TYPE_CONTROLLER: # Controller broadcast message I think 
               msg.source="CONTROLLER"
-
             if msg.source != "CONTROLLER" and devices[msg.source]['name'] > "":
               msg.source = devices[msg.source]['name']      # Get the device's actual name if we have it
 
