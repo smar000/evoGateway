@@ -55,7 +55,7 @@ if  os.path.isdir(sys.argv[0]):
 
 #---------------------------------------------------------------------------------------------------
 VERSION         = "1.9"
-CONFIG_FILE     = "evolistener.cfg"
+CONFIG_FILE     = "evogateway.cfg"
 
 #------------------------------------- Configs/Default ---------------------------------------------# 
 def getConfig(config,section,name,default):
@@ -76,18 +76,18 @@ COM_BAUD          = int(getConfig(config,"Serial Port","COM_BAUD",115200))
 COM_RETRY_LIMIT   = int(getConfig(config,"Serial Port","COM_RETRY_LIMIT",10))
 
 EVENTS_FILE       = getConfig(config,"Files","EVENTS_FILE","events.log")
-LOG_FILE          = getConfig(config,"Files","LOG_FILE","evolistener.log")
+LOG_FILE          = getConfig(config,"Files","LOG_FILE","evogateway.log")
 DEVICES_FILE      = getConfig(config,"Files","DEVICES_FILE","devices.json")
 NEW_DEVICES_FILE  = getConfig(config,"Files","NEW_DEVICES_FILE","devices_new.json")
 
 LOG_DROPPED_PACKETS = getConfig(config,"Other","LOG_DROPPED_PACKETS",False)
 
 MQTT_SERVER       = getConfig(config,"MQTT","MQTT_SERVER","")                  # Leave blank to disable MQTT publishing. Messages will still be saved in the various files
-MQTT_SUB_TOPIC    = getConfig(config,"MQTT","MQTT_SUB_TOPIC","evohome/listener/send")   # Note to exclude any trailing '/' 
-MQTT_PUB_TOPIC    = getConfig(config,"MQTT","MQTT_PUB_TOPIC","evohome/listener") 
+MQTT_SUB_TOPIC    = getConfig(config,"MQTT","MQTT_SUB_TOPIC","evohome/gateway/command")   # Note to exclude any trailing '/' 
+MQTT_PUB_TOPIC    = getConfig(config,"MQTT","MQTT_PUB_TOPIC","evohome/gateway") 
 MQTT_USER         = getConfig(config,"MQTT","MQTT_USER","") 
 MQTT_PW           = getConfig(config,"MQTT","MQTT_PW","") 
-MQTT_CLIENTID     = getConfig(config,"MQTT","MQTT_SERVER","evoListener")
+MQTT_CLIENTID     = getConfig(config,"MQTT","MQTT_SERVER","evoGateway")
 
 CONTROLLER_ID     = getConfig(config,"SENDER", "CONTROLLER_ID", "01:139901")
 THIS_GATEWAY_ID   = getConfig(config,"SENDER", "THIS_GATEWAY_ID","30:999999")
@@ -1027,7 +1027,7 @@ if not comConnected:
   sys.exit()
 
 display_and_log("","\n")
-display_and_log("","Evohome listener version " + VERSION )
+display_and_log("","Evohome Listener/Sender Gateway version " + VERSION )
 display_and_log("","Connected to COM port " + COM_PORT)  
 
 logfile.write("")
@@ -1141,7 +1141,7 @@ mqtt_client.loop_stop()
   # except Exception as e:
   #   if serial_port.is_open:
   #     serial_port.close()
-  #   print ("Evohome listener stopped")                   
+  #   print ("Evohome gateway stopped")                   
   #   pass
 
 

@@ -1,15 +1,15 @@
 [Unit]
-Description=Evohome Listener (Python) 
+Description=Evohome Listener/Sender Gateway (Python) 
 After=syslog.target
 
 [Service]
 Type=simple
 StandardOutput=syslog
 StandardError=syslog
-SyslogIdentifier=evolistener
+SyslogIdentifier=evoGateway
 User=root
-WorkingDirectory=/opt/_scripts/evohome/controller
-ExecStart=/usr/bin/python /opt/_scripts/evohome/controller/evolistener.py --log /var/log/evolistener.log 
+WorkingDirectory=/opt/_scripts/evohome/gateway
+ExecStart=/usr/bin/python /opt/_scripts/evohome/gateway/evogateway.py --log /var/log/evogateway.log 
 Restart=always
 RestartSec=10
 KillMode=process
