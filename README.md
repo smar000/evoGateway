@@ -118,9 +118,8 @@ The `name` parameter can be anything. Note that the script will automatically pr
 * **1 x CC1101 radio, 868MHz**, e.g. something like https://quadmeup.com/cc1101-868mhz-wireless-transciever-pinout 3. I think I paid about £2 for this. Also note that the image on that link does not show the antenna - this is just a small coil on mine (I’ve seen others with high gain antennaes but haven’t tried them as I wasn’t sure whether power directly from the arduino pins would be enough, and didn’t want to spend too much time on experimenting)
 
 * **A breadboard** or **8 x Dupont fly leads**. If using fly leads you need to ensure that sure that you have the correct male/female combination for your arduino and CC1101 card.
-<p align="center">
+
 ![alt text](./arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
-</p>
 
 Wiring pin connections will depend on the specific CC1101 board. In my case, I used the following:
 ```
