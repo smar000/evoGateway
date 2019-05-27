@@ -33,7 +33,7 @@ where <COMMAND_NAME> is one of:
 * `ping` or `date_request`: This sends a datetime sync request to the controller, which responds back immediately. This command has no arguments.  
    
    e.g. `{"command":"ping"}`
-* `controller_mode`: This is used to change the controller's mode. `ARG1_NAME` is `"mode"`, and `ARG1_VALUE` should be the mode number (give below). 
+* `controller_mode`: This is used to change the controller's mode. `ARG1_NAME` is `"mode"`, and `ARG1_VALUE` should be one of the following the mode numbers: 
   * 0: Auto
   * 1: Heating Off
   * 2: Eco-Auto
@@ -113,11 +113,17 @@ The deviceIDs are internal to each device. The first two digits determine the ty
 The `name` parameter can be anything. Note that the script will automatically prefix a device type 3 or 4 letter acronym to the name in the various log files showing the device type (e.g. `TRV Master Bedroom`). The `zoneId` is the zone number that evohome has assigned, and the `zoneMaster` flag is used to identify which of the devices is the master, for controlling overall zone temperature, in an multi-device zone (e.g. where there are more than one TRVs in a given zone). 
 
 #### Hardware
+
 * **1 x Arduino nano** (clone should be fine), preferably with FTDI usb chipset, though the cheaper CH341 chipset also worked. The only issue I had with the CH341 was that the USB port was not always cleanly released when the python script exited. My FTDI based build is much more reliable in this respect.
 
 * **1 x CC1101 radio, 868MHz**, e.g. something like https://quadmeup.com/cc1101-868mhz-wireless-transciever-pinout 3. I think I paid about £2 for this. Also note that the image on that link does not show the antenna - this is just a small coil on mine (I’ve seen others with high gain antennaes but haven’t tried them as I wasn’t sure whether power directly from the arduino pins would be enough, and didn’t want to spend too much time on experimenting)
 
 * **A breadboard** or **8 x Dupont fly leads**. If using fly leads you need to ensure that sure that you have the correct male/female combination for your arduino and CC1101 card.
+
+The parts listed above can be purchased for about £6 from ebay/Ali Express etc.
+
+** NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
+
 
 ![alt text](./arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
 
