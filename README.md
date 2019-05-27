@@ -122,7 +122,7 @@ The `name` parameter can be anything. Note that the script will automatically pr
 
 The parts listed above can be purchased for about £6 from ebay/Ali Express etc.
 
-** NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
+**NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
 
 
 ![alt text](./arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
