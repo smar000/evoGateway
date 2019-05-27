@@ -113,6 +113,9 @@ The deviceIDs are internal to each device. The first two digits determine the ty
 The `name` parameter can be anything. Note that the script will automatically prefix a device type 3 or 4 letter acronym to the name in the various log files showing the device type (e.g. `TRV Master Bedroom`). The `zoneId` is the zone number that evohome has assigned, and the `zoneMaster` flag is used to identify which of the devices is the master, for controlling overall zone temperature, in an multi-device zone (e.g. where there are more than one TRVs in a given zone). 
 
 #### Hardware
+**NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
+
+If building yourself, you will need:
 
 * **1 x Arduino nano** (clone should be fine), preferably with FTDI usb chipset, though the cheaper CH341 chipset also worked. The only issue I had with the CH341 was that the USB port was not always cleanly released when the python script exited. My FTDI based build is much more reliable in this respect.
 
@@ -122,7 +125,6 @@ The `name` parameter can be anything. Note that the script will automatically pr
 
 The parts listed above can be purchased for about £6 from ebay/Ali Express etc.
 
-**NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
 
 
 ![alt text](./arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
