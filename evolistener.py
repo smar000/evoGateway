@@ -261,6 +261,7 @@ def setpoint(msg):
         cmdNameSuffix = "_CTL"
     i = 0
     while (i < msg.payloadLength):
+<<<<<<< HEAD
       zoneData = msg.payload[i:i+6]
       zoneId = int(zoneData[0:2],16) + 1 #Zone number
       if zoneId >= 0 and zoneId in zones:
@@ -280,6 +281,21 @@ def setpoint(msg):
       postToMqtt(zone_name, "setpoint" + cmdNameSuffix,zoneSetPoint)
       # else:
       #   postToMqtt(zone_name, "setpoint_ondevice",zoneSetPoint)
+=======
+      try:
+        zoneData = msg.payload[i:i+6]
+        zoneId = int(zoneData[0:2],16) + 1 #Zone number
+        if zoneId >= 0 and zoneId in zones:
+          zone_name = zones[zoneId]
+        else:
+          zone_name = "Zone " + str(zoneId)
+        zoneSetPoint = float(int(zoneData[2:4],16) << 8 | int(zoneData [4:6],16))/100
+        if (zoneSetPoint == 325.11): # This seems to be the number sent when TRV manually switched to OFF
+          zoneSetPoint = 0
+          flag = " *(Heating is OFF)"
+        else:
+          flag = ""
+>>>>>>> 16466a0ff4911c5213faf3be7df72c1e3134d4e0
 
       # log("SETPOINT_STATUS     : " + '{0: <22}'.format(zone_name) + str(zoneSetPoint) + " [Zone " + str(zoneId) + "]")
       i += 6                          
