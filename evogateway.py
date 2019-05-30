@@ -148,28 +148,31 @@ class Message():
     self.command      = rawmsg[41:45].upper()       # command code hex
     self.command_name = self.command                # needs to be assigned outside, as we are doing all the processing outside of this class/struct
     try:
-      self.payload_length= int(rawmsg[46:49])          # Note this is not HEX...
+      self.payload_length = int(rawmsg[46:49])          # Note this is not HEX...
     except Exception as e:
       print ("Error instantiating Message class on line '{}': {}. Raw msg: '{}'. length = {}".format(sys.exc_info()[-1].tb_lineno, str(e), rawmsg, len(rawmsg)))
-      self.payload_length=0
+      self.payload_length = 0
     
     self.payload      = rawmsg[50:]
     self.failed_decrypt= "_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg
 
   def _initialise_device_names(self):
-    if self.source_type == DEVICE_TYPE['CTL'] and self.is_broadcast(): 
-      self.destination_name = "CONTROLLER"
-      self.source_name = "CONTROLLER"
-    elif DEVICE_TYPE[self.source_type] and devices[self.source]['name']:
-      self.source_name = "{} {}".format(DEVICE_TYPE[self.source_type], devices[self.source]['name'])      # Get the device's actual name if we have it
-    else:
-        print("Could not find device type '{}' or name for device '{}'".format(self.source_type, self.source))
-    if self.destination_name != "CONTROLLER" and devices[self.destination] and devices[self.destination]['name']:
-      if self.destination_type == DEVICE_TYPE['CTL']:
-        self.destination_name = "CONTROLLER"
-      else:
-        device_name = devices[self.destination]['name'] if devices[self.destination] else self.destination
-        self.destination_name = "{} {}".format(DEVICE_TYPE[self.destination_type], devices[self.destination]['name'])      # Get the device's actual name if we have it
+    try:
+        if self.source_type == DEVICE_TYPE['CTL'] and self.is_broadcast(): 
+          self.destination_name = "CONTROLLER"
+          self.source_name = "CONTROLLER"
+        elif DEVICE_TYPE[self.source_type] and self.source in devices and devices[self.source]['name']:
+          self.source_name = "{} {}".format(DEVICE_TYPE[self.source_type], devices[self.source]['name'])      # Get the device's actual name if we have it
+        else:
+            print("Could not find device type '{}' or name for device '{}'".format(self.source_type, self.source))
+        if self.destination_name != "CONTROLLER" and self.destination in devices and devices[self.destination]['name']:
+          if self.destination_type == DEVICE_TYPE['CTL']:
+            self.destination_name = "CONTROLLER"
+          else:
+            device_name = devices[self.destination]['name'] if self.destination in devices else self.destination
+            self.destination_name = "{} {}".format(DEVICE_TYPE[self.destination_type], devices[self.destination]['name'])      # Get the device's actual name if we have it
+    except Exception as e:
+      print ("Error initalising device names in Message class instantiation, on line '{}': {}. Raw msg: '{}'. length = {}".format(sys.exc_info()[-1].tb_lineno, str(e), self.rawmsg, len(self.rawmsg)))
 
 
   def is_broadcast(self):
@@ -322,8 +325,11 @@ def mqtt_publish(device,command,msg):
   if MQTT_SERVER > "":
     try:
       mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-      topic = MQTT_PUB_TOPIC + "/" + to_snake(device) + "/" + command.strip()
-      publish.single(topic, str(msg).strip(), hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
+      topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
+      timestamp = datetime.datetime.now().strftime("%Y-%d-%m %X")
+      msgs = [(topic, msg, 0, True), ("{}{}".format(topic,"_ts"), timestamp, 0, True)]
+      publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
+      # publish.single(topic, str(msg).strip(), hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
       # print("published to mqtt topic {}: {}".format(topic, msg))
     except Exception as e:
       print(str(e))
@@ -567,7 +573,7 @@ def other_command(msg):
 
 #--------------------------------------------
 def date_request(msg):
-  display_data_row(msg, "Ping/Datetime Sync", zone_id)
+  display_data_row(msg, "Ping/Datetime Sync")
   # display_and_log(msg.command_name, msg.source + " - " + ". MSG: " + msg.rawmsg)
 
 #--------------------------------------------
@@ -644,7 +650,7 @@ def zone_heat_demand(msg):
           zone_label = "UFH Zone"
         elif zone_id == 0xfc:
               device_type = "Boiler Relay"
-              topic = "BDR Boiler"
+              topic = "BDR Boiler Relay"
         elif zone_id == 0xfa:
           device_type = "DHW Relay"
           topic="DHW"
@@ -749,9 +755,9 @@ def dhw_state(msg):
       mqtt_publish("DHW","state",stateId)
       mqtt_publish("DHW","mode",mode)
       if until >"":        
-        mqtt_publish("DHW","until",dtm)
+        mqtt_publish("DHW", "until", dtm.strftime("%Y-%d-%m %X"))
       else:
-        mqtt_publish("DHW","until","")
+        mqtt_publish("DHW", "until", "")
 
 #--------------------------------------------
 def dhw_temperature(msg):
@@ -933,6 +939,9 @@ def process_command(command, args, serial_port, send_mode = "I"):
         display_and_log("COMMAND_MSG", send_string)
         byte_command = bytearray(b'{}\r\n'.format(send_string))
         response = serial_port.write(byte_command)
+        # timestamp = datetime.datetime.now().strftime("%Y-%m-%d %X")
+        # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
+        # publish.single("{}_ts".format(MQTT_SUB_TOPIC), timestamp, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
         
     else:
         display_and_log("ERROR","Invalid payload '{}'/payload length '{}'".format(payload, payload_length))
