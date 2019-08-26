@@ -1,6 +1,6 @@
 # Evohome Listener/Sender Gateway
 
-![alt text](./evolistener.png "evoListener screenshot")
+![alt text](./evogateway.png "evoListener screenshot")
 
 ***Update 25/5/19***: "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
 
