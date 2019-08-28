@@ -385,7 +385,7 @@ def mqtt_on_log(client, obj, level, string):
 
 def mqtt_on_message(client, userdata, msg):
     ''' mqtt message received on subscribed topic '''
-    print(msg.payload)
+    # print(msg.payload)
     json_data = json.loads(str(msg.payload))
     print(json_data)
     display_and_log("MQTT_SUB", json_data)
