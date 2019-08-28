@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 #!/usr/bin/python
-# Evohome Listener/Sender
+# evohome Listener/Sender
 # Copyright (c) 2019 SMAR info@smar.co.uk
 #
 # Tested with Python 2.7.12. Requires:
 # - pyserial (python -m pip install pyserial)
 # - paho (pip install paho-mqtt)
 #
-# Simple Evohome 'listener' and 'sender', for listening in and sending messages between evohome devices using an arudino + CC1101 radio receiver
+# Simple evohome 'listener' and 'sender', for listening in and sending messages between evohome devices using an arudino + CC1101 radio receiver
 # (other hardware options also possible - see credits below).
 # Messages are interpreted and then posted to an mqtt broker if an MQTT broker is defined in the configuration. Similary, sending commands over the
-# radio network are initiated via an mqtt 'send' topic.
+# radio network are initiated via an mqtt 'send' topic, and 'send' status updates posted back to an mqtt topic.
 #
 # CREDITS:
 # Code here is significntly based on the Domitcz source, specifically the EvohomeRadio.cpp file, by
@@ -55,10 +55,10 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.9.4"
+VERSION         = "1.9.5"
 CONFIG_FILE     = "evogateway.cfg"
 
-#------------------------------------- Configs/Default ---------------------------------------------#
+# --- Configs/Default
 def getConfig(config,section,name,default):
     if config.has_option(section,name):
         return config.get(section,name)
@@ -101,8 +101,10 @@ MQTT_CLIENTID     = getConfig(config,"MQTT", "MQTT_SERVER", "evoGateway")
 CONTROLLER_ID     = getConfig(config,"SENDER", "CONTROLLER_ID", "01:139901")
 THIS_GATEWAY_ID   = getConfig(config,"SENDER", "THIS_GATEWAY_ID","30:999999")
 THIS_GATEWAY_NAME = getConfig(config,"SENDER", "THIS_GATEWAY_NAME","EvoGateway")
+COMMAND_RESEND_TIMEOUT_SECS = float(getConfig(config,"SENDER", "COMMAND_RESEND_TIMEOUT_SECS",60.0))
+COMMAND_RESEND_ATTEMPTS= int(getConfig(config,"SENDER", "COMMAND_RESEND_ATTEMPTS",3))
 
-MAX_LOG_HISTORY   = getConfig(config,"SENDER", "MAX_LOG_HISTORY",10)
+MAX_LOG_HISTORY   = getConfig(config,"SENDER", "MAX_LOG_HISTORY",3)
 
 MAX_HISTORY_STACK_LENGTH = 5
 EMPTY_DEVICE_ID   = "--:------"
@@ -115,7 +117,6 @@ class TwoWayDict(dict):
         dict.__setitem__(self, key, value)
         dict.__setitem__(self, value, key)
 
-#----------------------------------------
 DEVICE_TYPE = TwoWayDict()
 DEVICE_TYPE["01"] = "CTL"
 DEVICE_TYPE["02"] = "UFH"
@@ -128,9 +129,9 @@ DEVICE_TYPE["34"] = "STAT"
 
 CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "Day Off", 7:"Custom"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
 
-#--------------------------------------------
-
+# --- Classes
 class Message():
+  ''' Object to hold details of interpreted (received) message. '''
   def __init__(self,rawmsg):
     self.rawmsg       = rawmsg.strip()
     self.source_id    = rawmsg[11:20]
@@ -155,8 +156,8 @@ class Message():
     self.destination_name = self.destination
     self._initialise_device_names()
 
-    self.command      = rawmsg[41:45].upper()       # command code hex
-    self.command_name = self.command                # needs to be assigned outside, as we are doing all the processing outside of this class/struct
+    self.command_code = rawmsg[41:45].upper()       # command code hex
+    self.command_name = self.command_code           # needs to be assigned outside, as we are doing all the processing outside of this class/struct
     try:
         self.payload_length = int(rawmsg[46:49])          # Note this is not HEX...
     except Exception as e:
@@ -168,6 +169,7 @@ class Message():
     self.failed_decrypt= "_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg
 
   def _initialise_device_names(self):
+    ''' Substitute device IDs for names if we have them or identify broadcast '''
     try:
         if self.source_type == DEVICE_TYPE['CTL'] and self.is_broadcast():
             self.destination_name = "CONTROLLER"
@@ -189,7 +191,33 @@ class Message():
   def is_broadcast(self):
     return self.source == self.destination
 
-#-------------------------------------------- General Functions  -----------------------------------
+class Command():
+  ''' Object to hold details of command sent to evohome controller.'''
+  def __init__(self, command_code=None, command_name=None, destination=None, args=None, serial_port=1, send_mode="I"):
+    self.command_code = command_code
+    self.command_name = command_name
+    self.destination = destination
+    self.args = args
+    self.serial_port = serial_port
+    self.send_mode = send_mode
+    self.send_string = None
+    self.send_dtm = None
+    self.retry_dtm = None
+    self.retries = 0
+    self.send_failed = False
+    self.send_acknowledged = False
+    self.send_acknowledged_dtm = None
+    self.dev1 = None
+    self.dev2 = None
+    self.dev3 = None
+    self.payload = None
+    
+    
+  def payload_length(self):
+    return len(self.payload)/2
+        
+
+# --- General Functions 
 def sig_handler(signum, frame):              # Trap Ctl C
     print("{} Tidying up and exiting...".format(datetime.datetime.now().strftime("%Y-%m-%d %X")))
     # display_and_log("Tidying up and exiting...")
@@ -199,7 +227,7 @@ def sig_handler(signum, frame):              # Trap Ctl C
         print("Closing port '{}'".format(port["connection"].port))
         port["connection"].close()
 
-#--------------------------------------------
+
 def rotate_files(baseFileName):
   if os.path.isfile(baseFileName + "." + str(MAX_LOG_HISTORY)):
     os.remove(baseFileName + "." + str(MAX_LOG_HISTORY))
@@ -214,21 +242,21 @@ def rotate_files(baseFileName):
         os.rename(baseFileName + orgFileExt, baseFileName + "." + str(i + 1))
     i -= 1
 
-#--------------------------------------------
-first_cap_re = re.compile('(.)([A-Z][a-z]+)')
-all_cap_re = re.compile('([a-z0-9])([A-Z])')
+
+_first_cap_re = re.compile('(.)([A-Z][a-z]+)')
+_all_cap_re = re.compile('([a-z0-9])([A-Z])')
 
 def to_snake(name):
   name=name.strip().replace("'","").replace(" ","_")
-  s1 = first_cap_re.sub(r'\1_\2', name)
-  s2 = all_cap_re.sub(r'\1_\2', s1).lower()
+  s1 = _first_cap_re.sub(r'\1_\2', name)
+  s2 = _all_cap_re.sub(r'\1_\2', s1).lower()
   return s2.replace("__","_")
 
-#--------------------------------------------
+
 def to_camel_case(s):
   return re.sub(r'(?!^) ([a-zA-Z])', lambda m: m.group(1).upper(), s)
 
-#--------------------------------------------
+
 def get_dtm_from_packed_hex(dtm_hex):
   dtm_mins = int(dtm_hex[0:2],16)
   dtm_hours = int(dtm_hex[2:4],16)
@@ -238,7 +266,6 @@ def get_dtm_from_packed_hex(dtm_hex):
   return datetime.datetime(year=dtm_year,month=dtm_month, day=dtm_day,hour=dtm_hours,minute=dtm_mins)
 
 
-#--------------------------------------------
 def display_data_row(msg, display_text, ref_zone=-1, suffix_text=""):
   destination = "BROADCAST MESSAGE" if msg.is_broadcast() else msg.destination_name
   if ref_zone >-1:
@@ -249,7 +276,7 @@ def display_data_row(msg, display_text, ref_zone=-1, suffix_text=""):
     display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {}".format(msg.msg_type, msg.source_name, destination, display_text, suffix_text)
   display_and_log(msg.command_name, display_row, msg.port)
 
-#--------------------------------------------
+
 def display_and_log(source="-", display_message="", port_tag=" "):
   try:
     global eventfile
@@ -258,15 +285,16 @@ def display_and_log(source="-", display_message="", port_tag=" "):
         rotate_files(EVENTS_FILE)
         eventfile = open(EVENTS_FILE,"a")
     row = "{} |{:>1}| {:<20}| {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_tag, source, display_message)
+    row = "{:<140}".format(row)
     print (row)
     # print   (datetime.datetime.now().strftime("%Y-%m-%d %X") + ": " + "{:<20}".format(str(source)) + ": " + str(display_message))
-    eventfile.write(row.strip() + "\n")
+    eventfile.write(row + "\n")
     file.flush(eventfile)
   except Exception as e:
     print (str(e))
     pass
 
-#--------------------------------------------
+
 def log(logentry, port_tag="-"):
   global logfile
   if os.path.getsize(LOG_FILE) > 10000000:
@@ -309,7 +337,8 @@ def init_com_ports():
         count +=1
   return serial_ports
 
-# MQTT Functions ---------------------------------
+
+# --- MQTT Functions -
 def initialise_mqtt_client(mqtt_client):
   mqtt_client.username_pw_set(MQTT_USER, MQTT_PW)
   mqtt_client.on_connect = mqtt_on_connect
@@ -323,6 +352,7 @@ def initialise_mqtt_client(mqtt_client):
   print("[INFO ] Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
   mqtt_client.subscribe(MQTT_SUB_TOPIC)
   mqtt_client.loop_start()
+
 
 def mqtt_on_connect(client, userdata, flags, rc):
     ''' mqtt connection event processing '''
@@ -355,9 +385,10 @@ def mqtt_on_log(client, obj, level, string):
 
 def mqtt_on_message(client, userdata, msg):
     ''' mqtt message received on subscribed topic '''
+    print(msg.payload)
     json_data = json.loads(str(msg.payload))
-
-    # display_and_log("MQTT_SUB", json_data)
+    print(json_data)
+    display_and_log("MQTT_SUB", json_data)
 
     command_code = json_data["command_code"] if "command_code" in json_data else None
     command = json_data["command"] if "command" in json_data else None
@@ -374,7 +405,7 @@ def mqtt_publish(device,command,msg):
     try:
         mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
         topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%X")
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
         msgs = [(topic, msg, 0, True), ("{}{}".format(topic,"_ts"), timestamp, 0, True)]
         publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
         # publish.single(topic, str(msg).strip(), hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
@@ -403,7 +434,7 @@ def init_homie():
     msgs =[]
     topic_base = "homie/evohome-gateway-{}".format(THIS_GATEWAY_ID.replace(":","-"))
     msgs.append (("{}/$homie".format(topic_base), 3.0, 0, True))
-    msgs.append (("{}/$name".format(topic_base), "Evohome Listener/Sender Gateway {}".format(THIS_GATEWAY_ID), 0, True))
+    msgs.append (("{}/$name".format(topic_base), "evohome Listener/Sender Gateway {}".format(THIS_GATEWAY_ID), 0, True))
     msgs.append (("{}/$state".format(topic_base), "ready", 0, True))
     msgs.append (("{}/$extensions".format(topic_base), "", 0, True))
 
@@ -472,7 +503,48 @@ def get_homie_node_topics(node_topic, node_property):
     msgs.append (("{}/$settable".format(topic_base), params.settable, 0, True))
     return msgs
 
-#-------------------------------------------- Evohome Functions ------------------------------------
+# --- evohome received message command processing functions
+def process_received_message(data, port_tag=None):
+  ''' Process the raw message received. Also check if it is a reponse to previous sent command '''
+  if not ("_ENC" in data or "_BAD" in data or "BAD_" in data or "ERR" in data) and len(data) > 40:          #Make sure no obvious errors in getting the data....
+    if not data.startswith("---"):
+        # Echos of commands sent by us come back without the --- prefix. Noticed on the fifo firmware that sometimes the request type prefix seems to be messed up. Workaround for this...
+        if data.strip().startswith("W---"):
+            data = data[1:]
+        else:
+            data = "---  {}".format(data) if len(data.split(" ",1)[0]) <2 else "--- {}".format(data)
+
+    if data_pattern.match(data):
+        msg = Message(data)
+        msg.port = port_tag
+        # Check if device is known...
+        if not msg.source in devices:
+            display_and_log("NEW DEVICE FOUND", msg.source)
+            devices.update({msg.source : {"name" : msg.source, "zone_id" : -1, "zoneMaster" : False  }})
+            with open(NEW_DEVICES_FILE,'w') as fp:
+                fp.write(json.dumps(devices, sort_keys=True, indent=4))
+            fp.close()
+
+        if msg.command_code in COMMANDS:
+            try:
+                msg.command_name = COMMANDS[msg.command_code].__name__.upper() # Get the name of the command from our list of commands
+                COMMANDS[msg.command_code](msg)
+                log('{: <18} {}'.format(msg.command_name, data), port_tag)
+            except Exception as e:
+                display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
+                traceback.print_exc()
+                # display_and_log("ERROR",msg.command_name + ": " + repr(e) + ": " + data)
+            return msg
+        else:
+            display_and_log("UNKNOWN COMMAND","Command code: {}, Payload: {}".format(msg.command_code, msg.payload), port_tag)
+            log("UNKNOWN COMMAND: {}".format(data), port_tag)
+    else:
+        display_and_log("ERROR","Pattern match failed on received data: '{}' (port: {})".format(data, port_tag))
+        return None
+  else:
+    return None
+
+
 def get_zone_details(payload, source_type=None):
   zone_id = int(payload[0:2],16)
   if zone_id < 12:
@@ -504,7 +576,7 @@ def bind(msg):
   display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
   pass
 
-#--------------------------------------------
+
 def sync(msg):
   # https://www.domoticaforum.eu/viewtopic.php?f=7&t=5806&start=120#p73918
   # Basically the controller sends a broadcast write 1f09 with f8 in the first byte
@@ -521,19 +593,19 @@ def sync(msg):
     display_data_row(msg, "Payload: {}".format(msg.payload))
   pass
 
-#--------------------------------------------
+
 def schedule_sync(msg):
   display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
   pass
   # The 0x0006 command is a schedule sync message sent between the gateway to controller to check whether there have been any changes since the last exchange of schedule information
   # https://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80/page13
 
-#--------------------------------------------
+
 def zone_name(msg):
   display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
   pass
 
-#--------------------------------------------
+
 def setpoint_ufh(msg):
   # Not 100% sure what this command is. First 2 digits seem to be ufh controller zone, followed by 4 digits which appear to be for the
   # zone's setpoint, then 0A2801.
@@ -559,7 +631,7 @@ def setpoint_ufh(msg):
 
     i += 12
 
-#--------------------------------------------
+
 def setpoint(msg):
   if msg.payload_length % 3 != 0:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be multiple of 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -587,7 +659,7 @@ def setpoint(msg):
         mqtt_publish(zone_name, "setpoint" + command_name_suffix,zone_setpoint)
         i += 6
 
-#--------------------------------------------
+
 def setpoint_override(msg):
   if msg.payload_length != 7 and msg.payload_length != 13:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be 7 or 13). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -609,7 +681,7 @@ def setpoint_override(msg):
     display_data_row(msg, "{:5.2f}°C".format(new_setpoint), zone_id, until)
     mqtt_publish(topic, "setpointOverride",new_setpoint)
 
-#--------------------------------------------
+
 def zone_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
   zone_id=0
@@ -624,7 +696,7 @@ def zone_temperature(msg):
   display_data_row(msg, "{:5.2f}°C".format(temperature), zone_id)
   mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name), "temperature",temperature)
 
-#--------------------------------------------
+
 def window_status(msg):
   if msg.payload_length < 3:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be less than 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -648,15 +720,15 @@ def window_status(msg):
   display_data_row(msg, "{:>7}".format(status), zone_id)
   mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name),"window_status",status)
 
-#--------------------------------------------
+
 def other_command(msg):
   display_and_log(msg.command_name, msg.rawmsg)
 
-#--------------------------------------------
+
 def date_request(msg):
   display_data_row(msg, "Ping/Datetime Sync")
 
-#--------------------------------------------
+
 def relay_heat_demand(msg):
   # Heat demand sent by the controller for CH / DHW / Boiler  (F9/FA/FC)
   if msg.payload_length != 2:
@@ -672,7 +744,7 @@ def relay_heat_demand(msg):
     display_data_row(msg, "{:>6.1f}% @ {}".format(demand_percentage, zone_name, "(type id: {})".format(type_id)))
     mqtt_publish(topic,"heat_demand",demand_percentage)
 
-#--------------------------------------------
+
 def zone_heat_demand(msg):
   if msg.payload_length % 2 != 0 :
     display_and_log(msg.command_name, "Invalid payload length of {} (should be mod 2). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -720,7 +792,7 @@ def zone_heat_demand(msg):
             display_and_log("DEBUG", "ERROR: Could not post to MQTT as topic undefined")
         i += 4
 
-#--------------------------------------------
+
 def dhw_settings(msg):
   #  <1:DevNo><2(uint16_t):SetPoint><1:Overrun?><2:Differential>
   if msg.payload_length != 6:
@@ -734,7 +806,7 @@ def dhw_settings(msg):
 
   display_data_row(msg,"DHW Setpoint: {}°C; Re-heat triggered at {}°C. (Overrun state: {})".format(setpoint, reheat_trigger, overrun), -1, "(Device: {})".format(device_number))
 
-#--------------------------------------------
+
 def actuator_check_req(msg):
   # this is used to synchronise time periods for each relay bound to a controller
   # i.e. all relays get this message and use it to determine when to start each cycle (demand is just a % of the cycle length)
@@ -752,7 +824,7 @@ def actuator_check_req(msg):
 
     display_data_row(msg, status)
 
-#--------------------------------------------
+
 def actuator_state(msg):
   if msg.payload_length == 1 and msg.msg_type == "RQ":
     display_data_row(msg, "State update request")
@@ -771,7 +843,7 @@ def actuator_state(msg):
     display_data_row(msg, "{:>7}".format(status))
     mqtt_publish("relays/{}".format(msg.source_name),"actuator_status",status)
 
-#--------------------------------------------
+
 def dhw_state(msg):
   if msg.payload_length == 1 and msg.msg_type =="RQ":
     display_and_log(msg.command_name, "Request sent: {}".format(msg.payload))
@@ -818,13 +890,13 @@ def dhw_state(msg):
         else:
             mqtt_publish("DHW", "mode_until", "")
 
-#--------------------------------------------
+
 def dhw_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
   display_data_row(msg, "{:5.2f}°C".format(temperature))
   mqtt_publish("DHW", "temperature", temperature)
 
-#--------------------------------------------
+
 def zone_info(msg):
     if msg.payload_length % 6 != 0:
         display_and_log(msg.command_name, "Invalid payload length of {} (should be mod 6). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -845,7 +917,6 @@ def zone_info(msg):
         i += 12
 
 
-#--------------------------------------------
 def device_info(msg):
     if msg.payload_length == 3:
         display_and_log(msg.command_name, "Device information requested: {}".format(msg.payload))
@@ -856,7 +927,7 @@ def device_info(msg):
     display_data_row(msg, msg.rawmsg)
     # display_and_log(msg.command_name, msg.rawmsg)
 
-#--------------------------------------------
+
 def battery_info(msg):
   if msg.payload_length != 3:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -880,7 +951,7 @@ def battery_info(msg):
     topic = "dhw" if zone_id == 250 else zones[zone_id]
     mqtt_publish("{}/{}".format(topic, msg.source_name),"battery",battery)
 
-#--------------------------------------------
+
 def controller_mode(msg):
   if msg.payload_length != 8:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be 8). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -904,19 +975,97 @@ def controller_mode(msg):
     display_data_row(msg, "{} mode".format(mode), -1, until)
     mqtt_publish(msg.source_name,"mode",mode)
 
-#--------------------------------------------
+
 def heartbeat(msg):
   display_and_log(msg.command_name, msg.rawmsg, msg.port)
 
-#--------------------------------------------
+
 def external_sensor(msg):
   display_and_log(msg.command_name, msg.rawmsg, msg.port)
 
-#--------------------------------------------
+
 def unknown_command(msg):
   display_and_log(msg.command_name, msg.rawmsg, msg.port)
 
-#-------------------------------------------- Evohome Send Command Functions
+# --- evohome send command functions
+def process_send_command(command_code, command_name, args, serial_port, send_mode="I"):
+  ''' Send command to evohome gateway '''
+  if not command_code and not command_name:
+      display_and_log("ERROR","Cannot send command without valid command_code ({}) or command_name ({}) [args: '{}']".format(command_code, command_name, args))
+      return
+
+  if not command_code:
+    command_code = COMMAND_CODES[command_name] if command_name in COMMAND_CODES else 0x0
+  elif isinstance(command_code, str if sys.version_info[0] >= 3 else basestring): # Convert string to number - note 2.7 and 3.0+ versions
+    command_code_digits = command_code.replace("0x", "")
+    if command_code_digits in COMMANDS:
+      command_name = COMMANDS[command_code_digits].__name__.upper()
+    command_code = int(command_code, 16)
+
+  if command_code == 0x0:
+      display_and_log("ERROR","Unrecognised command_name '{}'".format(command_name))
+      return
+
+  send_string = ""
+  print (command_name)
+  if "payload" not in args:
+      payload_length = -1
+      payload = ""
+      if (command_name and command_name == "dhw_state") or (command_code and command_code == 0x1F41):
+          # 1F41: Change dhw state
+          state_id = args["state_id"]
+          until = args["until"] if "until" in args else None
+          mode_id = args["mode_id"] if "mode_id" in args else -1
+          payload, payload_length = get_dhw_state_payload(state_id, until, mode_id)
+          if send_mode is None:
+              send_mode = "W"
+      elif (command_name and command_name == "date_request ping") or (command_code and command_code == 0x313F):
+          # 0x313F: Send a datetime update request, i.e. like a ping
+          payload_length = 1
+          payload = "00"
+          if send_mode is None:
+              send_mode = "RQ"
+      elif (command_name and command_name == "controller_mode") or (command_code and command_code == 0x2E04):
+          # 0x2E04: Set controller mode
+          mode = args["mode"]
+          until = args["until"] if "until" in args else None
+          payload, payload_length = get_controller_mode_payload(mode, until)
+
+          # Send mode needs to be 'W' to set the controller to the new controller mode
+          if send_mode is None:
+              send_mode = "W"
+      elif (command_name and command_name == "setpoint_override") or (command_code and command_code == 0x2349):
+          # 0x2349: Setpoint override
+          zone_id = args["zone_id"]
+          setpoint = args["setpoint"]
+          until = args["until"] if "until" in args else None
+          payload, payload_length = get_setpoint_override_payload(zone_id, setpoint, until)
+          if send_mode is None:
+              send_mode = "W"
+  else:
+      payload = args["payload"]
+      payload_length = len(payload)/2
+
+  dev1 = args["dev1"] if "dev1" in args else THIS_GATEWAY_ID
+  dev2 = args["dev2"] if "dev2" in args else CONTROLLER_ID
+  dev3 = args["dev3"] if "dev3" in args else EMPTY_DEVICE_ID
+
+  if payload_length > -1 and payload:
+    send_command = Command(command_code, command_name, dev2, args, serial_port, send_mode)
+    send_command.payload = payload
+    send_command.dev1 = dev1
+    send_command.dev2 = dev2
+    send_command.dev3 = dev3
+
+    print ("send mode: {}".format(send_mode))
+    sent_command = send_command_to_evohome(send_command)
+    return sent_command
+
+  else:
+      display_and_log("ERROR","Invalid payload '{}'/payload length '{}'".format(payload, payload_length))
+      return None
+
+
 def get_controller_mode_payload(mode_id, until_string=None):
     payload_length = 8
     if until_string == None:
@@ -929,7 +1078,7 @@ def get_controller_mode_payload(mode_id, until_string=None):
     payload = "{:02X}{}{:02X}".format(mode_id, until ,duration_code)
     return payload, payload_length
 
-#--------------------------------------------
+
 def get_dhw_state_payload(state_id, until_string=None, mode_id=-1):
     # state_id is 0 or 1 for DHW on/off
     if until_string == None:
@@ -944,6 +1093,7 @@ def get_dhw_state_payload(state_id, until_string=None, mode_id=-1):
     zone_id = 0
     payload = "{:02X}{:02x}{:02X}FFFFFF{}".format(zone_id, state_id, mode_id, until)
     return payload, payload_length
+
 
 def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
     #
@@ -967,120 +1117,72 @@ def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
 
     return payload, payload_length
 
+
 def dtm_string_to_payload(dtm_string):
     dtm = datetime.datetime.strptime(dtm_string, "%Y-%m-%dT%H:%M:%SZ")
     payload = "{:02X}{:02X}{:02X}{:02X}{:04X}".format(dtm.minute, dtm.hour, dtm.day, dtm.month, dtm.year)
     return payload
 
-def process_command(command_code, command, args, serial_port, send_mode="I"):
-    if not command_code and not command:
-        display_and_log("ERROR","Cannot send without valid command_code ({}) or command ({}) [args: '{}']".format(command_code, command, args))
-        return
 
-    if not command_code:
-        command_code = COMMAND_CODES[command] if command in COMMAND_CODES else 0x0
-    elif isinstance(command_code, str if sys.version_info[0] >= 3 else basestring): # Convert string to number - note 2.7 and 3.0+ versions
-        command_code = int(command_code, 16)
+def send_command_to_evohome(command):
+  if not command and not(command.command_code and command.payload):
+    display_and_log("ERROR","Send to evohome failed as invalid send_command: {}".format(command))
+    return
 
-    if command_code == 0x0:
-        display_and_log("ERROR","Unrecognised command '{}'".format(command))
-        return
+  send_string = "{} --- {} {} {} {:04X} {:03d} {}".format(command.send_mode, command.dev1, \
+    command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
+  display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper(), send_string))
+  byte_command = bytearray(b'{}\r\n'.format(send_string))
+  response = serial_port.write(byte_command)
+  
+  timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
+  mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
+  topic_base = "{}/{}".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
+  topic = "{}/command_sent".format(topic_base)
 
-    send_string = ""
+  # ("{}/{}".format(topic_base, MQTT_SUB_TOPIC.split("/")[-1]), "", 0, True), 
+  msgs = [(topic, "{} {}".format(command.command_name, args) , 0, True), ("{}_ack".format(topic),False, 0, True), \
+    ("{}_retries".format(topic), command.retries, 0, True), ("{}_retry_ts".format(topic), "", 0, True), \
+      ("{}_failed".format(topic), False, 0, True), (MQTT_SUB_TOPIC, "", 0, True)]
 
-    if "payload" not in args:
-        payload_length = -1
-        payload = ""
-        if command == "dhw_state":
-            # 1F41: Change dhw state
-            state_id = args["state_id"]
-            until = args["until"] if "until" in args else None
-            mode_id = args["mode_id"] if "mode_id" in args else -1
-            payload, payload_length = get_dhw_state_payload(state_id, until, mode_id)
-            if send_mode is None:
-                send_mode = "W"
-        elif command in "date_request ping":
-            # 0x313F: Send a datetime update request, i.e. like a ping
-            payload_length = 1
-            payload = "00"
-            if send_mode is None:
-                send_mode = "RQ"
-        elif command == "controller_mode":
-            # 0x2E04: Set controller mode
-            mode = args["mode"]
-            until = args["until"] if "until" in args else None
-            payload, payload_length = get_controller_mode_payload(mode, until)
-
-            # Send mode needs to be 'W' to set the controller to the new controller mode
-            if send_mode is None:
-                send_mode = "W"
-        elif command == "setpoint_override":
-            # 0x2349: Setpoint override
-            zone_id = args["zone_id"]
-            setpoint = args["setpoint"]
-            until = args["until"] if "until" in args else None
-            payload, payload_length = get_setpoint_override_payload(zone_id, setpoint, until)
-            if send_mode is None:
-                send_mode = "W"
-    else:
-        payload = args["payload"]
-        payload_length = len(payload)/2
-
-    dev1 = args["dev1"] if "dev1" in args else THIS_GATEWAY_ID
-    dev2 = args["dev2"] if "dev2" in args else CONTROLLER_ID
-    dev3 = args["dev3"] if "dev3" in args else EMPTY_DEVICE_ID
-
-    if payload_length > -1 and payload:
-        send_string = "{} --- {} {} {} {:04X} {:03d} {}".format(send_mode, dev1, dev2, dev3, command_code, payload_length, payload)
-        display_and_log("COMMAND_MSG", send_string)
-        byte_command = bytearray(b'{}\r\n'.format(send_string))
-        response = serial_port.write(byte_command)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %X")
-        mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-        msgs = [(MQTT_SUB_TOPIC, "", 0, True), ("{}_prev".format(MQTT_SUB_TOPIC), "{} {}".format(command, args) , 0, True), ("{}_prev_ts".format(MQTT_SUB_TOPIC), timestamp, 0, True)]
-        publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
-
-    else:
-        display_and_log("ERROR","Invalid payload '{}'/payload length '{}'".format(payload, payload_length))
-
-def process_received_message(data, port_tag=None):
-  if not ("_ENC" in data or "_BAD" in data or "BAD_" in data or "ERR" in data) and len(data) > 40:          #Make sure no obvious errors in getting the data....
-    if not data.startswith("---"):
-        # Echos of commands sent by us come back without the --- prefix. Noticed on the fifo firmware that sometimes the request type prefix seems to be messed up. Workaround for this...
-        if data.strip().startswith("W---"):
-            data = data[1:]
-        else:
-            data = "---  {}".format(data) if len(data.split(" ",1)[0]) <2 else "--- {}".format(data)
-
-    if data_pattern.match(data):
-        msg = Message(data)
-        msg.port = port_tag
-        # Check if device is known...
-        if not msg.source in devices:
-            display_and_log("NEW DEVICE FOUND", msg.source)
-            devices.update({msg.source : {"name" : msg.source, "zone_id" : -1, "zoneMaster" : False  }})
-            with open(NEW_DEVICES_FILE,'w') as fp:
-                fp.write(json.dumps(devices, sort_keys=True, indent=4))
-            fp.close()
-
-        if msg.command in COMMANDS:
-            try:
-                msg.command_name = COMMANDS[msg.command].__name__.upper() # Get the name of the command from our list of commands
-                COMMANDS[msg.command](msg)
-                log('{: <18} {}'.format(msg.command_name, data), port_tag)
-            except Exception as e:
-                display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
-                traceback.print_exc()
-                # display_and_log("ERROR",msg.command_name + ": " + repr(e) + ": " + data)
-        else:
-            display_and_log("UNKNOWN COMMAND","Command code: {}, Payload: {}".format(msg.command, msg.payload), port_tag)
-            log("UNKNOWN COMMAND: {}".format(data), port_tag)
-    else:
-        display_and_log("ERROR","Pattern match failed on received data: '{}' (port: {})".format(data, port_tag))
+  if command.retries == 0:
+    msgs.append (("{}_ts".format(topic), timestamp, 0, True))
   else:
-    return "DATA_ERROR"
+    msgs.append (("{}_retry_ts".format(topic), timestamp, 0, True))
 
-#-------------------------------------------- Evohome Commands Dict
+  publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
+  
+  command.send_string = send_string
+  if command.retries ==  0:
+    command.send_dtm = datetime.datetime.now()
+  command.retry_dtm = datetime.datetime.now()
+  command.retries += 1
+
+  return command
+
+
+def check_previous_command_sent(previous_command):
+  ''' Resend previous command if ack not received in reasonable time '''
+  if not previous_command or previous_command.send_acknowledged:
+    return
+  if previous_command.retries < COMMAND_RESEND_ATTEMPTS:
+    seconds_since_sent = (datetime.datetime.now() - previous_command.retry_dtm).total_seconds()
+    
+    if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
+      display_and_log("COMMAND_OUT","{}: Command NOT acknowledged. Resending attempt {} of {}...".format(
+        previous_command.command_name, previous_command.retries, COMMAND_RESEND_ATTEMPTS))
+      previous_command = send_command_to_evohome(previous_command)
+  else:
+    if not previous_command.send_failed: 
+      previous_command.send_failed = True
+      mqtt_publish(THIS_GATEWAY_NAME,"command_sent_failed",True)
+      # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
+      # topic = "{}/{}/command_sent_failed".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
+      # publish.single(topic, True, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True) 
+      display_and_log("COMMAND","ERROR: Previously sent command '{}' failed to send. No ack received from controller".format(previous_command.command_name))
+    
+
+# --- evohome Commands Dict
 COMMANDS = {
   '0002': external_sensor,
   '0004': zone_name,
@@ -1135,7 +1237,7 @@ COMMAND_CODES = {
   "zone_temperature" : 0x30C9
 }
 
-#-------------------------------- Main ----------------------------------------
+# --- Main
 rotate_files(LOG_FILE)
 rotate_files(EVENTS_FILE)
 logfile = open(LOG_FILE, "a")
@@ -1143,22 +1245,18 @@ eventfile = open(EVENTS_FILE,"a")
 
 signal.signal(signal.SIGINT, sig_handler)    # Trap CTL-C etc
 
-
-#-------------------------------------------------------------------------------
 serial_ports = init_com_ports()
 if len(serial_ports) == 0:
   print("Serial port(s) parameters not found. Exiting...")
   sys.exit()
 
-
 display_and_log("","\n")
-display_and_log("","Evohome Listener/Sender Gateway version " + VERSION )
+display_and_log("","evohome Listener/Sender Gateway version " + VERSION )
 for port_id, port in serial_ports.items():
   display_and_log("","{}: Connected to COM port {}".format(port["tag"], port_id))
 
 logfile.write("")
 logfile.write("-----------------------------------------------------------\n")
-
 
 if os.path.isfile(DEVICES_FILE):
   with open(DEVICES_FILE, 'r') as fp:
@@ -1189,39 +1287,53 @@ display_and_log('','Listening...')
 
 file.flush(logfile)
 
-
 # init MQTT
 mqtt_client = mqtt.Client()
 initialise_mqtt_client(mqtt_client)
 
-
 prev_data_had_errors = False
 data_pattern = re.compile("^--- ( I| W|RQ|RP) --- \d{2}:\d{6} (--:------ |\d{2}:\d{6} ){2}[0-9a-fA-F]{4} \d{3}")
-
-#---------------- Main loop ---------------------
-
 data_row_stack = deque()
-
+last_sent_command = None
 ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items())
+
+# Main loop
 while ports_open:
   try:
     for port_id, port in serial_ports.items():
       serial_port = port["connection"]
       if serial_port.is_open:
+
+        # Check if last command needs to be resent
+        if last_sent_command and not last_sent_command.send_failed and not last_sent_command.send_acknowledged:
+          check_previous_command_sent(last_sent_command)
+
+        # Process any unsent commands waiting to be sent 
         if send_queue and "is_send_port" in port["parameters"] and port["parameters"]["is_send_port"]:
-          command_code, command, args, send_mode = send_queue.pop()
-          process_command(command_code, command, args, serial_port, send_mode)
+          command_code, command_name, args, send_mode = send_queue.pop()
+          last_sent_command = process_send_command(command_code, command_name, args, serial_port, send_mode)
+
           if send_queue:
               display_and_log("DEBUG", "---> send_queue remaining: {}".format(send_queue))
 
+        # Now check for incoming...
         if serial_port.inWaiting() > 0:
           data_row = serial_port.readline().strip()
           if data_row:
             stack_entry = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), data_row)
-            if stack_entry not in data_row_stack:
-              return_status = process_received_message(data_row, port["tag"])
-              if return_status != "DATA_ERROR":
-                  prev_data_had_errors = False
+            
+            # Make sure it is not a duplicate message (e.g. received through additional listener/gateway devices)
+            if stack_entry not in data_row_stack: 
+              msg = process_received_message(data_row, port["tag"])
+              if msg:
+                # Check if the received message is acknowledgement of previously sent command 
+                if last_sent_command and msg.source == last_sent_command.destination and msg.destination == THIS_GATEWAY_ID:
+                  # display_and_log("Previously sent command '{}' acknowledged".format(last_sent_command.command_name), msg.source)
+                  mqtt_publish(THIS_GATEWAY_NAME,"command_sent_ack",True)
+                  last_sent_command.send_acknowledged = True
+                  last_sent_command.send_acknowledged_dtm = datetime.datetime.now()
+                  display_and_log("COMMAND_OUT","{}: Command acknowledged by controller".format(last_sent_command.command_name.upper()))
+                prev_data_had_errors = False
               else:
                   if not prev_data_had_errors and LOG_DROPPED_PACKETS:
                       prev_data_had_errors = True

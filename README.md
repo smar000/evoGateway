@@ -2,6 +2,9 @@
 
 ![alt text](./evogateway.png "evoListener screenshot")
 
+
+***Update 28/08/19***: Added auto-retry for failed sending of commands; added send command status updates to mqtt topic; added custom send commands capability.
+
 ***Update 25/5/19***: "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
 
 ---
@@ -52,13 +55,24 @@ where <COMMAND_NAME> is one of:
   
    e.g. `{"command":"dhw_state", "arguments" : {"state_id": 0}}`
 
-
 Optionally, for a temporary change in mode, setpoint or dhw state, and end-time can be specified. For this, `ARG2_NAME` is `until` and `ARG2_VALUE` is the date/time in format `"YYYY-MM-DDTHH:MM:SSZ"`.  
 
 An example of this command could be:  
   `{"command":"controller_mode", "arguments" : {"mode": 2, "until":"2019-05-21T03:30:00Z"}}`  
   
-Finally, when instructions are correctly sent by the gateway script/arduino hardware, the controller responds back almost immediately. This can be seen in the received messages window, and thus used as confirmation that the send is working and whether or not the command has been processed correctly.
+Finally, custom commands can be sent by providing the `command_code` in hex (with `0x` prefix) instead of `command` in the json, and the hex `payload` in the `arguments` json, e.g.:
+
+`{"command_code": "0x313F"}`
+
+Additionally, custom payloads can also be sent by adding to the `arguments` json. In this case, the `send_mode` must also be specified:
+
+`{"command_code": "0x313F", "send_mode": "RQ", "arguments" : {"payload": "00"}}`
+
+Finally, when such command instructions are correctly by the controller, the controller responds back almost immediately with a message to the gateway. This is shown in the received messages window. They system can automatically resend commands in case it has not received (or recognised) and acknowledgement from the controller. Timeouts between retries and maximum number of retries can be specified in the config file using the parameters `COMMAND_RESEND_TIMEOUT_SECS` and 
+`COMMAND_RESEND_ATTEMPTS` respectively.
+
+Note also that command send status, retries etc are posted to the MQTT broker, to a topic with the gateway's name.
+
 
 ### Requirements
 This script has only been tested on Ubuntu 16.04 server, running python 2.7.12. It requires the following python modules:
@@ -91,6 +105,8 @@ Configuration parameters are defined in a separate file, `evogateway.cfg`, with 
     [SENDER]
     THIS_GATEWAY_ID     = 30:071715
     THIS_GATEWAY_NAME   = EvoGateway
+    COMMAND_RESEND_TIMEOUT_SECS = 30
+    COMMAND_RESEND_ATTEMPTS = 5
 
     [MISC]
     LOG_DROPPED_PACKETS = False
