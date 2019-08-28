@@ -68,7 +68,7 @@ Additionally, custom payloads can also be sent by adding to the `arguments` json
 
 `{"command_code": "0x313F", "send_mode": "RQ", "arguments" : {"payload": "00"}}`
 
-Finally, when such command instructions are correctly by the controller, the controller responds back almost immediately with a message to the gateway. This is shown in the received messages window. They system can automatically resend commands in case it has not received (or recognised) and acknowledgement from the controller. Timeouts between retries and maximum number of retries can be specified in the config file using the parameters `COMMAND_RESEND_TIMEOUT_SECS` and 
+Finally, when such command instructions are received correctly by the controller, the controller responds back almost immediately with a message to the gateway. This is shown in the received messages window. The gateway system can automatically resend commands in case it has not received (or recognised) the command acknowledgement from the controller in a reasonable time. Timeouts between retries and maximum number of retries can be specified in the config file using the parameters `COMMAND_RESEND_TIMEOUT_SECS` and 
 `COMMAND_RESEND_ATTEMPTS` respectively.
 
 Note also that command send status, retries etc are posted to the MQTT broker, to a topic with the gateway's name.
