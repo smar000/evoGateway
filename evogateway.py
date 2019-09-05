@@ -101,14 +101,21 @@ MQTT_CLIENTID     = getConfig(config,"MQTT", "MQTT_SERVER", "evoGateway")
 CONTROLLER_ID     = getConfig(config,"SENDER", "CONTROLLER_ID", "01:139901")
 THIS_GATEWAY_ID   = getConfig(config,"SENDER", "THIS_GATEWAY_ID","30:999999")
 THIS_GATEWAY_NAME = getConfig(config,"SENDER", "THIS_GATEWAY_NAME","EvoGateway")
+THIS_GATEWAY_TYPE_ID = THIS_GATEWAY_ID.split(":")[0]
+
 COMMAND_RESEND_TIMEOUT_SECS = float(getConfig(config,"SENDER", "COMMAND_RESEND_TIMEOUT_SECS",60.0))
 COMMAND_RESEND_ATTEMPTS= int(getConfig(config,"SENDER", "COMMAND_RESEND_ATTEMPTS",3))
+AUTO_RESET_PORTS_ON_FAILURE = getConfig(config,"SENDER", "AUTO_RESET_PORTS_ON_FAILURE", False)
 
 MAX_LOG_HISTORY   = getConfig(config,"SENDER", "MAX_LOG_HISTORY",3)
 
 MAX_HISTORY_STACK_LENGTH = 5
 EMPTY_DEVICE_ID   = "--:------"
 
+SYS_CONFIG_COMMAND = "sys_config"
+RESET_COM_PORTS   = "reset_com_ports"
+
+SYSTEM_MSG_TAG = "*"
 #----------------------------------------
 class TwoWayDict(dict):
     def __len__(self):
@@ -126,6 +133,7 @@ DEVICE_TYPE["13"] = "BDR"
 DEVICE_TYPE["30"] = "GWAY"
 DEVICE_TYPE["34"] = "STAT"
 # Type 30 is a Mobile Gateway such as RGS100
+
 
 CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "Day Off", 7:"Custom"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
 
@@ -193,7 +201,7 @@ class Message():
 
 class Command():
   ''' Object to hold details of command sent to evohome controller.'''
-  def __init__(self, command_code=None, command_name=None, destination=None, args=None, serial_port=1, send_mode="I"):
+  def __init__(self, command_code=None, command_name=None, destination=None, args=None, serial_port=-1, send_mode="I", instruction=None):
     self.command_code = command_code
     self.command_name = command_name
     self.destination = destination
@@ -210,9 +218,10 @@ class Command():
     self.dev1 = None
     self.dev2 = None
     self.dev3 = None
-    self.payload = None
-    
-    
+    self.payload = ""
+    self.command_instruction = instruction
+   
+
   def payload_length(self):
     return len(self.payload)/2
         
@@ -334,9 +343,19 @@ def init_com_ports():
 
       if serial_port is not None:
         serial_ports[port] = {"connection": serial_port, "parameters" : params, "tag": count}
+        display_and_log(SYSTEM_MSG_TAG,"{}: Connected to serial port {}".format(serial_ports[port]["tag"], port))
         count +=1
   return serial_ports
 
+def reset_com_ports():
+  if len(serial_ports) > 1:
+    display_and_log(SYSTEM_MSG_TAG,"Resetting serial port connections")
+  # if port is changed for a given serial_port, the serial_port is closed/reopened as per pySerial docs
+  for port_id, port in serial_ports.items():
+      if port["connection"]:
+        display_and_log(SYSTEM_MSG_TAG,"Resetting port '{}'".format(port["connection"].port))
+        port["connection"].port = port["connection"].port
+  display_and_log(SYSTEM_MSG_TAG,"Serial ports have been reset")
 
 # --- MQTT Functions -
 def initialise_mqtt_client(mqtt_client):
@@ -346,10 +365,10 @@ def initialise_mqtt_client(mqtt_client):
   # mqtt_client.on_log = mqtt_on_log
   mqtt_client.on_disconnect = mqtt_on_disconnect
 
-  print("[INFO ] Connecting to mqtt server %s" % MQTT_SERVER)
+  display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt server %s" % MQTT_SERVER)
   mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=0, bind_address="")
 
-  print("[INFO ] Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
+  display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
   mqtt_client.subscribe(MQTT_SUB_TOPIC)
   mqtt_client.loop_start()
 
@@ -359,9 +378,9 @@ def mqtt_on_connect(client, userdata, flags, rc):
 
     if rc == 0:
         client.connected_flag = True #set flag
-        print("[INFO ] MQTT connection established with broker")
+        display_and_log (SYSTEM_MSG_TAG,"MQTT connection established with broker")
     else:
-        print("[INFO ] MQTT connection failed (code {})".format(rc))
+        display_and_log (SYSTEM_MSG_TAG,"MQTT connection failed (code {})".format(rc))
         if DEBUG:
             print("[DEBUG] mqtt userdata: {}, flags: {}, client: {}".format(userdata, flags, client))
 
@@ -384,20 +403,33 @@ def mqtt_on_log(client, obj, level, string):
 
 
 def mqtt_on_message(client, userdata, msg):
-    ''' mqtt message received on subscribed topic '''
-    # print(msg.payload)
-    json_data = json.loads(str(msg.payload))
-    print(json_data)
-    display_and_log("MQTT_SUB", json_data)
+  ''' mqtt message received on subscribed topic '''
+  # print(msg.payload)
+  json_data = json.loads(str(msg.payload))
+  # print(json_data)
+  display_and_log("MQTT_SUB", json_data)
 
+  if SYS_CONFIG_COMMAND in json_data:
+    if json_data[SYS_CONFIG_COMMAND] == RESET_COM_PORTS:
+      command_code, command_name, args, send_mode = get_reset_serialports_command()
+    else:
+      display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
+      return
+  else:
+    command_name = json_data["command"] if "command" in json_data else None
     command_code = json_data["command_code"] if "command_code" in json_data else None
-    command = json_data["command"] if "command" in json_data else None
-
-    if command or command_code:
+    if command_code:
+      if type(command_code) is int:
+        command_code = hex(command_code)
+      command_code = command_code.upper().replace("0X","")
+    if command_name or command_code:
         args = json_data["arguments"] if "arguments" in json_data else ""
         send_mode = json_data["send_mode"] if "send_mode" in json_data else None
         # display_and_log("MQTT_SUB","command: {}, args: {}, send mode: {}".format(command, args, send_mode))
-        send_queue.append([command_code, command, args, send_mode])
+  # command_code=None, command_name=None, destination=None, args=None, serial_port=1, send_mode="I", instruction=None):
+  new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))
+  send_queue.append(new_command)
+  # send_queue.append([command_code, command_name, args, send_mode, json.dumps(json_data)])
 
 
 def mqtt_publish(device,command,msg):
@@ -987,87 +1019,93 @@ def external_sensor(msg):
 def unknown_command(msg):
   display_and_log(msg.command_name, msg.rawmsg, msg.port)
 
+
+def get_reset_serialports_command():
+   return Command(SYS_CONFIG_COMMAND, RESET_COM_PORTS)
+
 # --- evohome send command functions
-def process_send_command(command_code, command_name, args, serial_port, send_mode="I"):
-  ''' Send command to evohome gateway '''
-  if not command_code and not command_name:
-      display_and_log("ERROR","Cannot send command without valid command_code ({}) or command_name ({}) [args: '{}']".format(command_code, command_name, args))
+def process_send_command(command):
+  ''' Process system configuration command or send command to evohome gateway '''
+  if not command.command_code and not command.command_name:
+      display_and_log("ERROR","Cannot process command without valid command_code ({}) or command_name ({}) [args: '{}']".format(
+        command.command_code, command.command_name, args))
       return
 
-  if not command_code:
-    command_code = COMMAND_CODES[command_name] if command_name in COMMAND_CODES else 0x0
-  elif isinstance(command_code, str if sys.version_info[0] >= 3 else basestring): # Convert string to number - note 2.7 and 3.0+ versions
-    command_code_digits = command_code.replace("0x", "")
-    if command_code_digits in COMMANDS:
-      command_name = COMMANDS[command_code_digits].__name__.upper()
-    command_code = int(command_code, 16)
+  # Check and do system config commands first
+  if command.command_code == SYS_CONFIG_COMMAND:
+    if command.command_name == RESET_COM_PORTS:
+      reset_com_ports()
+    else:
+      display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(command.command_name))
+    return # Either way, we return. Rest of the fn is processing actual evohome commands
 
-  if command_code == 0x0:
-      display_and_log("ERROR","Unrecognised command_name '{}'".format(command_name))
+  # Command must be an evohome one. Process and send.
+  if not command.command_code: # command_name takes priority over command_code
+    command.command_code = COMMAND_CODES[command.command_name] if command.command_name in COMMAND_CODES else "0000"
+  else:
+    if command.command_code in COMMANDS:
+      command.command_name = COMMANDS[command.command_code].__name__.upper()
+    else:
+      display_and_log("DEBUG", "Command name not found for code '{}'".format(command.command_code))
+    
+  if command.command_code == "0000":
+      display_and_log("ERROR","Unrecognised command.command_name '{}'".format(command.command_name))
       return
+
 
   send_string = ""
-  print (command_name)
-  if "payload" not in args:
-      payload_length = -1
-      payload = ""
-      if (command_name and command_name == "dhw_state") or (command_code and command_code == 0x1F41):
+  # print (command.command_name)
+  if "payload" not in command.args:
+      if (command.command_name and command.command_name == "dhw_state") or (command.command_code and command.command_code == "1F41"):
           # 1F41: Change dhw state
-          state_id = args["state_id"]
-          until = args["until"] if "until" in args else None
-          mode_id = args["mode_id"] if "mode_id" in args else -1
-          payload, payload_length = get_dhw_state_payload(state_id, until, mode_id)
-          if send_mode is None:
-              send_mode = "W"
-      elif (command_name and command_name == "date_request ping") or (command_code and command_code == 0x313F):
+          state_id = command.args["state_id"]
+          until = command.args["until"] if "until" in command.args else None
+          mode_id = command.args["mode_id"] if "mode_id" in command.args else -1
+          command.payload = get_dhw_state_payload(state_id, until, mode_id)
+          if command.send_mode is None:
+              command.send_mode = "W"
+      elif (command.command_name and command.command_name in "date_request ping") or (command.command_code and command.command_code == "313F"):
           # 0x313F: Send a datetime update request, i.e. like a ping
-          payload_length = 1
-          payload = "00"
-          if send_mode is None:
-              send_mode = "RQ"
-      elif (command_name and command_name == "controller_mode") or (command_code and command_code == 0x2E04):
+          command.payload = "00"
+          if command.send_mode is None:
+              command.send_mode = "RQ"
+      elif (command.command_name and command.command_name == "controller_mode") or (command.command_code and command.command_code == "2E04"):
           # 0x2E04: Set controller mode
-          mode = args["mode"]
-          until = args["until"] if "until" in args else None
-          payload, payload_length = get_controller_mode_payload(mode, until)
+          mode = command.args["mode"]
+          until = command.args["until"] if "until" in command.args else None
+          command.payload = get_controller_mode_payload(mode, until)
 
           # Send mode needs to be 'W' to set the controller to the new controller mode
-          if send_mode is None:
-              send_mode = "W"
-      elif (command_name and command_name == "setpoint_override") or (command_code and command_code == 0x2349):
+          if command.send_mode is None:
+              command.send_mode = "W"
+      elif (command.command_name and command.command_name == "setpoint_override") or (command.command_code and command.command_code == "2349"):
           # 0x2349: Setpoint override
-          zone_id = args["zone_id"]
-          setpoint = args["setpoint"]
-          until = args["until"] if "until" in args else None
-          payload, payload_length = get_setpoint_override_payload(zone_id, setpoint, until)
-          if send_mode is None:
-              send_mode = "W"
+          zone_id = command.args["zone_id"]
+          setpoint = command.args["setpoint"]
+          until = command.args["until"] if "until" in command.args else None
+          command.payload = get_setpoint_override_payload(zone_id, setpoint, until)
+          if command.send_mode is None:
+              command.send_mode = "W"
   else:
-      payload = args["payload"]
-      payload_length = len(payload)/2
+      command.payload = command.args["payload"]
+      if command.send_mode is None:
+        command.send_mode = "I"
 
-  dev1 = args["dev1"] if "dev1" in args else THIS_GATEWAY_ID
-  dev2 = args["dev2"] if "dev2" in args else CONTROLLER_ID
-  dev3 = args["dev3"] if "dev3" in args else EMPTY_DEVICE_ID
+  command.dev1 = command.args["dev1"] if "dev1" in command.args else THIS_GATEWAY_ID
+  command.dev2 = command.args["dev2"] if "dev2" in command.args else CONTROLLER_ID
+  command.dev3 = command.args["dev3"] if "dev3" in command.args else EMPTY_DEVICE_ID
+  command.destination = command.dev2
 
-  if payload_length > -1 and payload:
-    send_command = Command(command_code, command_name, dev2, args, serial_port, send_mode)
-    send_command.payload = payload
-    send_command.dev1 = dev1
-    send_command.dev2 = dev2
-    send_command.dev3 = dev3
-
-    print ("send mode: {}".format(send_mode))
-    sent_command = send_command_to_evohome(send_command)
+  if command.payload_length() > -1 and command.payload:
+    sent_command = send_command_to_evohome(command)
     return sent_command
 
   else:
-      display_and_log("ERROR","Invalid payload '{}'/payload length '{}'".format(payload, payload_length))
+      display_and_log("ERROR","Invalid command.payload = '{}' or command.payload length = {}".format(command.payload, command.payload_length()))
       return None
 
 
 def get_controller_mode_payload(mode_id, until_string=None):
-    payload_length = 8
     if until_string == None:
         duration_code = 0x0
         until = "FFFFFFFFFFFF"
@@ -1076,23 +1114,21 @@ def get_controller_mode_payload(mode_id, until_string=None):
         until = dtm_string_to_payload(until_string)
 
     payload = "{:02X}{}{:02X}".format(mode_id, until ,duration_code)
-    return payload, payload_length
+    return payload
 
 
 def get_dhw_state_payload(state_id, until_string=None, mode_id=-1):
     # state_id is 0 or 1 for DHW on/off
     if until_string == None:
-        payload_length = 6
         until = ""
         if mode_id == -1:
             mode_id = 0 # Revert to auto
     else:
-        payload_length = 12
         until = dtm_string_to_payload(until_string)
         mode_id = 4 # if we have an 'until', mode must be temporary
     zone_id = 0
     payload = "{:02X}{:02x}{:02X}FFFFFF{}".format(zone_id, state_id, mode_id, until)
-    return payload, payload_length
+    return payload
 
 
 def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
@@ -1100,22 +1136,19 @@ def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
     # modes:  [Auto, -1, Permanent, -1, Temporary] (zero based)
     #
     if until_string:
-        payload_length = 13
         until = dtm_string_to_payload(until_string)
         mode = 4
     elif setpoint >0:
-        payload_length = 7
         mode = 2
         until = ""
     else:
         # If setpoint is 0, we revert back to auto
-        payload_length = 7
         mode = 0
         until = ""
 
     payload = "{:02X}{:04X}{:02X}FFFFFF{}".format(zone_id - 1, int(setpoint * 100), mode, until)
 
-    return payload, payload_length
+    return payload
 
 
 def dtm_string_to_payload(dtm_string):
@@ -1129,30 +1162,33 @@ def send_command_to_evohome(command):
     display_and_log("ERROR","Send to evohome failed as invalid send_command: {}".format(command))
     return
 
-  send_string = "{} --- {} {} {} {:04X} {:03d} {}".format(command.send_mode, command.dev1, \
+  command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1, 
     command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
-  display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper(), send_string))
-  byte_command = bytearray(b'{}\r\n'.format(send_string))
+  display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
+  byte_command = bytearray(b'{}\r\n'.format(command.send_string))
   response = serial_port.write(byte_command)
   
   timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
   mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-  topic_base = "{}/{}".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
-  topic = "{}/command_sent".format(topic_base)
+  # topic_base = "{}/{}".format(MQTT_PUB_TOPIC, to_snake("{}_{}".format(THIS_GATEWAY_TYPE, THIS_GATEWAY_NAME)))
+  # topic = "{}/{}".format(SENT_COMMAND_TOPIC, SENT_COMMAND_SUBTOPIC)
 
   # ("{}/{}".format(topic_base, MQTT_SUB_TOPIC.split("/")[-1]), "", 0, True), 
-  msgs = [(topic, "{} {}".format(command.command_name, args) , 0, True), ("{}_ack".format(topic),False, 0, True), \
-    ("{}_retries".format(topic), command.retries, 0, True), ("{}_retry_ts".format(topic), "", 0, True), \
-      ("{}_failed".format(topic), False, 0, True), (MQTT_SUB_TOPIC, "", 0, True)]
-
+  msgs = [
+    ("{}/command".format(SENT_COMMAND_TOPIC), "{} {}".format(command.command_name, command.args), 0, True),
+    ("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True), 
+    ("{}/ack".format(SENT_COMMAND_TOPIC),False, 0, True), 
+    ("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True), 
+    ("{}/retry_ts".format(SENT_COMMAND_TOPIC), "", 0, True), 
+    ("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True), 
+    ("{}/org_instruction".format(SENT_COMMAND_TOPIC), command.command_instruction, 0, True), 
+    (MQTT_SUB_TOPIC, "", 0, True)]
   if command.retries == 0:
-    msgs.append (("{}_ts".format(topic), timestamp, 0, True))
+    msgs.append (("{}/initial_sent_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True))
   else:
-    msgs.append (("{}_retry_ts".format(topic), timestamp, 0, True))
+    msgs.append (("{}/last_retry_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True))
 
   publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
-  
-  command.send_string = send_string
   if command.retries ==  0:
     command.send_dtm = datetime.datetime.now()
   command.retry_dtm = datetime.datetime.now()
@@ -1165,7 +1201,7 @@ def check_previous_command_sent(previous_command):
   ''' Resend previous command if ack not received in reasonable time '''
   if not previous_command or previous_command.send_acknowledged:
     return
-  if previous_command.retries < COMMAND_RESEND_ATTEMPTS:
+  if previous_command.retries < COMMAND_RESEND_ATTEMPTS + 1:
     seconds_since_sent = (datetime.datetime.now() - previous_command.retry_dtm).total_seconds()
     
     if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
@@ -1175,11 +1211,15 @@ def check_previous_command_sent(previous_command):
   else:
     if not previous_command.send_failed: 
       previous_command.send_failed = True
-      mqtt_publish(THIS_GATEWAY_NAME,"command_sent_failed",True)
+      mqtt_publish(SENT_COMMAND_TOPIC,"command_sent_failed",True)
       # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
       # topic = "{}/{}/command_sent_failed".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
       # publish.single(topic, True, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True) 
       display_and_log("COMMAND","ERROR: Previously sent command '{}' failed to send. No ack received from controller".format(previous_command.command_name))
+
+      if AUTO_RESET_PORTS_ON_FAILURE:
+        # command_code, command_name, args, send_mode = get_reset_serialports_command()
+        send_queue.append(get_reset_serialports_command())
     
 
 # --- evohome Commands Dict
@@ -1212,30 +1252,36 @@ COMMANDS = {
 # 10A0: DHW settings sent between controller and DHW sensor can also be requested by the gateway
 
 COMMAND_CODES = {
-  "actuator_check_req" : 0x3B00,
-  "actuator_state" : 0x3EF0,
-  "battery_info" : 0x1060,
-  "bind" : 0x1FC9,
-  "controller_mode" : 0x2E04,
-  "date_request" : 0x313F,
-  "device_info" : 0x0418,
-  "dhw_state" : 0x1F41,
-  "dhw_temperature" : 0x1260,
-  "external_sensor": 0x0002,
-  "heartbeat" : 0x10e0,
-  "other_command" : 0x0100,
-  "ping" : 0x313F,
-  "relay_heat_demand" : 0x0008,
-  "setpoint" : 0x2309,
-  "setpoint_override" : 0x2349,
-  "setpoint_ufh" : 0x22C9,
-  "sync" : 0x1F09,
-  "window_status" : 0x12B0,
-  "zone_heat_demand" : 0x3150,
-  "zone_info" : 0x000A,
-  "zone_name": 0x0004,
-  "zone_temperature" : 0x30C9
+  "actuator_check_req" : "3B00",
+  "actuator_state" : "3EF0",
+  "battery_info" : "1060",
+  "bind" : "1FC9",
+  "controller_mode" : "2E04",
+  "date_request" : "313F",
+  "device_info" : "0418",
+  "dhw_state" : "1F41",
+  "dhw_temperature" : "1260",
+  "external_sensor": "0002",
+  "heartbeat" : "10e0",
+  "other_command" : "0100",
+  "ping" : "313F",
+  "relay_heat_demand" : "0008",
+  "setpoint" : "2309",
+  "setpoint_override" : "2349",
+  "setpoint_ufh" : "22C9",
+  "sync" : "1F09",
+  "window_status" : "12B0",
+  "zone_heat_demand" : "3150",
+  "zone_info" : "000A",
+  "zone_name": "0004",
+  "zone_temperature" : "30C9"
 }
+
+THIS_GATEWAY_TYPE = DEVICE_TYPE[THIS_GATEWAY_TYPE_ID]
+
+SENT_COMMAND_SUBTOPIC = "sent_command"
+SENT_COMMAND_TOPIC_BASE = to_snake("{}/{}_{}".format(MQTT_PUB_TOPIC, THIS_GATEWAY_TYPE, THIS_GATEWAY_NAME))
+SENT_COMMAND_TOPIC = "{}/{}".format(SENT_COMMAND_TOPIC_BASE, SENT_COMMAND_SUBTOPIC)
 
 # --- Main
 rotate_files(LOG_FILE)
@@ -1245,15 +1291,16 @@ eventfile = open(EVENTS_FILE,"a")
 
 signal.signal(signal.SIGINT, sig_handler)    # Trap CTL-C etc
 
-serial_ports = init_com_ports()
+# display_and_log("","\n")
+display_and_log("","evohome Listener/Sender Gateway version " + VERSION )
+
+serial_ports = init_com_ports() # global var serial_ports also changed in fn reset_com_ports
 if len(serial_ports) == 0:
   print("Serial port(s) parameters not found. Exiting...")
   sys.exit()
 
-display_and_log("","\n")
-display_and_log("","evohome Listener/Sender Gateway version " + VERSION )
-for port_id, port in serial_ports.items():
-  display_and_log("","{}: Connected to COM port {}".format(port["tag"], port_id))
+# for port_id, port in serial_ports.items():
+#   display_and_log("","{}: Connected to COM port {}".format(port["tag"], port_id))
 
 logfile.write("")
 logfile.write("-----------------------------------------------------------\n")
@@ -1268,6 +1315,7 @@ devices[THIS_GATEWAY_ID] = { "name" : THIS_GATEWAY_NAME, "zoneId": 240, "zoneMas
 
 zones = {}                            # Create a seperate collection of Zones, so that we can look up zone names quickly
 send_queue = []
+send_queue_size_displayed = 0         # Used to track if we've shown the queue size recently or not
 
 for d in devices:
   if devices[d]['zoneMaster']:
@@ -1295,7 +1343,7 @@ prev_data_had_errors = False
 data_pattern = re.compile("^--- ( I| W|RQ|RP) --- \d{2}:\d{6} (--:------ |\d{2}:\d{6} ){2}[0-9a-fA-F]{4} \d{3}")
 data_row_stack = deque()
 last_sent_command = None
-ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items())
+ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items()) # ports_open var also updated in fn close_com_ports
 
 # Main loop
 while ports_open:
@@ -1308,15 +1356,18 @@ while ports_open:
         if last_sent_command and not last_sent_command.send_failed and not last_sent_command.send_acknowledged:
           check_previous_command_sent(last_sent_command)
 
-        # Process any unsent commands waiting to be sent 
+        # Process any unsent commands waiting to be sent only if we don't have any pending last_sent_command
         if send_queue and "is_send_port" in port["parameters"] and port["parameters"]["is_send_port"]:
-          command_code, command_name, args, send_mode = send_queue.pop()
-          last_sent_command = process_send_command(command_code, command_name, args, serial_port, send_mode)
-
-          if send_queue:
-              display_and_log("DEBUG", "---> send_queue remaining: {}".format(send_queue))
-
-        # Now check for incoming...
+          if not last_sent_command or last_sent_command.send_acknowledged or last_sent_command.send_failed:
+            new_command = send_queue.pop()
+            last_sent_command = process_send_command(new_command)
+            if send_queue and len(send_queue) != send_queue_size_displayed:
+              display_and_log("DEBUG","{} command(s) queued for sending to controller".format(len(send_queue)))
+          elif len(send_queue) != send_queue_size_displayed:
+            display_and_log("DEBUG","{} command(s) queued and held, pending acknowledgement of '{}' command previously sent".format(len(send_queue), last_sent_command.command_name))          
+          send_queue_size_displayed = len(send_queue) 
+          
+        # Now check for incoming... 
         if serial_port.inWaiting() > 0:
           data_row = serial_port.readline().strip()
           if data_row:
@@ -1329,7 +1380,7 @@ while ports_open:
                 # Check if the received message is acknowledgement of previously sent command 
                 if last_sent_command and msg.source == last_sent_command.destination and msg.destination == THIS_GATEWAY_ID:
                   # display_and_log("Previously sent command '{}' acknowledged".format(last_sent_command.command_name), msg.source)
-                  mqtt_publish(THIS_GATEWAY_NAME,"command_sent_ack",True)
+                  mqtt_publish(SENT_COMMAND_SUBTOPIC,"ack",True)
                   last_sent_command.send_acknowledged = True
                   last_sent_command.send_acknowledged_dtm = datetime.datetime.now()
                   display_and_log("COMMAND_OUT","{}: Command acknowledged by controller".format(last_sent_command.command_name.upper()))
@@ -1346,7 +1397,8 @@ while ports_open:
 
       time.sleep(0.01)
     ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items())
-
+  except serial.SerialException:
+    display_and_log("ERROR","Serial port exception occured")
   except KeyboardInterrupt:
     for port_id, port in serial_ports.items():
       if port["connection"].is_open:
