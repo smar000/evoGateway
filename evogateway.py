@@ -206,6 +206,7 @@ class Command():
     self.command_name = command_name
     self.destination = destination
     self.args = args
+    self.arg_desc = ""
     self.serial_port = serial_port
     self.send_mode = send_mode
     self.send_string = None
@@ -220,13 +221,13 @@ class Command():
     self.dev3 = None
     self.payload = ""
     self.command_instruction = instruction
-   
+
 
   def payload_length(self):
     return len(self.payload)/2
-        
 
-# --- General Functions 
+
+# --- General Functions
 def sig_handler(signum, frame):              # Trap Ctl C
     print("{} Tidying up and exiting...".format(datetime.datetime.now().strftime("%Y-%m-%d %X")))
     # display_and_log("Tidying up and exiting...")
@@ -407,7 +408,7 @@ def mqtt_on_message(client, userdata, msg):
   # print(msg.payload)
   json_data = json.loads(str(msg.payload))
   # print(json_data)
-  display_and_log("MQTT_SUB", json_data)
+  log("{: <18} {}".format("MQTT_SUB", json_data))
 
   if SYS_CONFIG_COMMAND in json_data:
     if json_data[SYS_CONFIG_COMMAND] == RESET_COM_PORTS:
@@ -425,18 +426,17 @@ def mqtt_on_message(client, userdata, msg):
     if command_name or command_code:
         args = json_data["arguments"] if "arguments" in json_data else ""
         send_mode = json_data["send_mode"] if "send_mode" in json_data else None
-        # display_and_log("MQTT_SUB","command: {}, args: {}, send mode: {}".format(command, args, send_mode))
-  # command_code=None, command_name=None, destination=None, args=None, serial_port=1, send_mode="I", instruction=None):
+
   new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))
   send_queue.append(new_command)
-  # send_queue.append([command_code, command_name, args, send_mode, json.dumps(json_data)])
 
 
-def mqtt_publish(device,command,msg):
+def mqtt_publish(device, command, msg, topic=None):
   if MQTT_SERVER > "":
     try:
         mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-        topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
+        if not topic:
+        	topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
         timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
         msgs = [(topic, msg, 0, True), ("{}{}".format(topic,"_ts"), timestamp, 0, True)]
         publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
@@ -1047,7 +1047,7 @@ def process_send_command(command):
       command.command_name = COMMANDS[command.command_code].__name__.upper()
     else:
       display_and_log("DEBUG", "Command name not found for code '{}'".format(command.command_code))
-    
+
   if command.command_code == "0000":
       display_and_log("ERROR","Unrecognised command.command_name '{}'".format(command.command_name))
       return
@@ -1064,11 +1064,17 @@ def process_send_command(command):
           command.payload = get_dhw_state_payload(state_id, until, mode_id)
           if command.send_mode is None:
               command.send_mode = "W"
+          if until:
+            command.arg_desc ="{} until {}".format("ON" if state_id == 1 else "OFF", until)
+          else:
+            command.arg_desc ="{}".format("ON" if state_id == 1 else "OFF")
+
       elif (command.command_name and command.command_name in "date_request ping") or (command.command_code and command.command_code == "313F"):
           # 0x313F: Send a datetime update request, i.e. like a ping
           command.payload = "00"
           if command.send_mode is None:
               command.send_mode = "RQ"
+
       elif (command.command_name and command.command_name == "controller_mode") or (command.command_code and command.command_code == "2E04"):
           # 0x2E04: Set controller mode
           mode = command.args["mode"]
@@ -1078,6 +1084,11 @@ def process_send_command(command):
           # Send mode needs to be 'W' to set the controller to the new controller mode
           if command.send_mode is None:
               command.send_mode = "W"
+          if until:
+            command.arg_desc = "{} until {}".format(mode, until)
+          else:
+            command.arg_desc = mode
+
       elif (command.command_name and command.command_name == "setpoint_override") or (command.command_code and command.command_code == "2349"):
           # 0x2349: Setpoint override
           zone_id = command.args["zone_id"]
@@ -1086,6 +1097,10 @@ def process_send_command(command):
           command.payload = get_setpoint_override_payload(zone_id, setpoint, until)
           if command.send_mode is None:
               command.send_mode = "W"
+          if until:
+            command.arg_desc = "{} degC until {} for zone {}".format(setpoint, until, zones[zone_id] if zone_id in zones else zone_id)
+          else:
+            command.arg_desc = command.arg_desc = "{} degC for zone {}".format(setpoint, zones[zone_id] if zone_id in zones else zone_id)
   else:
       command.payload = command.args["payload"]
       if command.send_mode is None:
@@ -1162,26 +1177,33 @@ def send_command_to_evohome(command):
     display_and_log("ERROR","Send to evohome failed as invalid send_command: {}".format(command))
     return
 
-  command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1, 
+  command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1,
     command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
-  display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
+  log_row = "{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string)
+  log('{: <18} {}'.format("COMMAND_OUT", log_row))
+  # display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
+  if command.arg_desc:
+    display_and_log("COMMAND_OUT","{}: Sending command with arguments '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.arg_desc))
+  else:
+    display_and_log("COMMAND_OUT","{}: Sending command to controller".format(command.command_name.upper() if command.command_name is not None else "-None-"))
+
   byte_command = bytearray(b'{}\r\n'.format(command.send_string))
   response = serial_port.write(byte_command)
-  
+
   timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
   mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
   # topic_base = "{}/{}".format(MQTT_PUB_TOPIC, to_snake("{}_{}".format(THIS_GATEWAY_TYPE, THIS_GATEWAY_NAME)))
   # topic = "{}/{}".format(SENT_COMMAND_TOPIC, SENT_COMMAND_SUBTOPIC)
 
-  # ("{}/{}".format(topic_base, MQTT_SUB_TOPIC.split("/")[-1]), "", 0, True), 
+  # ("{}/{}".format(topic_base, MQTT_SUB_TOPIC.split("/")[-1]), "", 0, True),
   msgs = [
     ("{}/command".format(SENT_COMMAND_TOPIC), "{} {}".format(command.command_name, command.args), 0, True),
-    ("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True), 
-    ("{}/ack".format(SENT_COMMAND_TOPIC),False, 0, True), 
-    ("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True), 
-    ("{}/retry_ts".format(SENT_COMMAND_TOPIC), "", 0, True), 
-    ("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True), 
-    ("{}/org_instruction".format(SENT_COMMAND_TOPIC), command.command_instruction, 0, True), 
+    ("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True),
+    ("{}/ack".format(SENT_COMMAND_TOPIC),False, 0, True),
+    ("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True),
+    ("{}/retry_ts".format(SENT_COMMAND_TOPIC), "", 0, True),
+    ("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True),
+    ("{}/org_instruction".format(SENT_COMMAND_TOPIC), command.command_instruction, 0, True),
     (MQTT_SUB_TOPIC, "", 0, True)]
   if command.retries == 0:
     msgs.append (("{}/initial_sent_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True))
@@ -1203,24 +1225,24 @@ def check_previous_command_sent(previous_command):
     return
   if previous_command.retries < COMMAND_RESEND_ATTEMPTS + 1:
     seconds_since_sent = (datetime.datetime.now() - previous_command.retry_dtm).total_seconds()
-    
+
     if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
       display_and_log("COMMAND_OUT","{}: Command NOT acknowledged. Resending attempt {} of {}...".format(
         previous_command.command_name, previous_command.retries, COMMAND_RESEND_ATTEMPTS))
       previous_command = send_command_to_evohome(previous_command)
   else:
-    if not previous_command.send_failed: 
+    if not previous_command.send_failed:
       previous_command.send_failed = True
       mqtt_publish(SENT_COMMAND_TOPIC,"command_sent_failed",True)
       # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
       # topic = "{}/{}/command_sent_failed".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
-      # publish.single(topic, True, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True) 
+      # publish.single(topic, True, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
       display_and_log("COMMAND","ERROR: Previously sent command '{}' failed to send. No ack received from controller".format(previous_command.command_name))
 
       if AUTO_RESET_PORTS_ON_FAILURE:
         # command_code, command_name, args, send_mode = get_reset_serialports_command()
         send_queue.append(get_reset_serialports_command())
-    
+
 
 # --- evohome Commands Dict
 COMMANDS = {
@@ -1364,23 +1386,23 @@ while ports_open:
             if send_queue and len(send_queue) != send_queue_size_displayed:
               display_and_log("DEBUG","{} command(s) queued for sending to controller".format(len(send_queue)))
           elif len(send_queue) != send_queue_size_displayed:
-            display_and_log("DEBUG","{} command(s) queued and held, pending acknowledgement of '{}' command previously sent".format(len(send_queue), last_sent_command.command_name))          
-          send_queue_size_displayed = len(send_queue) 
-          
-        # Now check for incoming... 
+            display_and_log("DEBUG","{} command(s) queued and held, pending acknowledgement of '{}' command previously sent".format(len(send_queue), last_sent_command.command_name))
+          send_queue_size_displayed = len(send_queue)
+
+        # Now check for incoming...
         if serial_port.inWaiting() > 0:
           data_row = serial_port.readline().strip()
           if data_row:
             stack_entry = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), data_row)
-            
+
             # Make sure it is not a duplicate message (e.g. received through additional listener/gateway devices)
-            if stack_entry not in data_row_stack: 
+            if stack_entry not in data_row_stack:
               msg = process_received_message(data_row, port["tag"])
               if msg:
-                # Check if the received message is acknowledgement of previously sent command 
+                # Check if the received message is acknowledgement of previously sent command
                 if last_sent_command and msg.source == last_sent_command.destination and msg.destination == THIS_GATEWAY_ID:
                   # display_and_log("Previously sent command '{}' acknowledged".format(last_sent_command.command_name), msg.source)
-                  mqtt_publish(SENT_COMMAND_SUBTOPIC,"ack",True)
+                  mqtt_publish("", "", True, "{}/ack".format(SENT_COMMAND_TOPIC))
                   last_sent_command.send_acknowledged = True
                   last_sent_command.send_acknowledged_dtm = datetime.datetime.now()
                   display_and_log("COMMAND_OUT","{}: Command acknowledged by controller".format(last_sent_command.command_name.upper()))
