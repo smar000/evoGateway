@@ -7,6 +7,8 @@
 
 ***Update 25/5/19***: "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
 
+***Update 18/1/20***: Updated README to include HCC80R zone definition 
+
 ---
 
 An evohome 'gateway' python script, for listening in on the radio communcation between Honeywell's evohome heating control devices, **and sending back** instructions to the Evohome Controller via the same radio mechanism. The hardware required for this script is is just (a) an arudino with a USB connector and (b) a CC1101 868Mhz radio receiver board (other hardware options also possible - see link in credits below).
@@ -127,6 +129,13 @@ The `DEVICES_FILE` is a *json* file containing a list of the devices on the evoh
 The deviceIDs are internal to each device. The first two digits determine the type of device (I think) and the remaining 6 digits are unique identifiers. As the listener script runs, if it finds a device with ID that has not been defined in the `DEVICES_FILE`, it will save it to a new file, as defined in the `NEW_DEVICES_FILE`. This can then be edited as required, and manually moved to replace the original `DEVICES_FILE`. 
 
 The `name` parameter can be anything. Note that the script will automatically prefix a device type 3 or 4 letter acronym to the name in the various log files showing the device type (e.g. `TRV Master Bedroom`). The `zoneId` is the zone number that evohome has assigned, and the `zoneMaster` flag is used to identify which of the devices is the master, for controlling overall zone temperature, in an multi-device zone (e.g. where there are more than one TRVs in a given zone). 
+
+*Note*: The HCC80R UFH relays seems to send it's own zone number (i.e. as per the lights on the HCC80R), independent of the zones defined in the main evohome controller. For example, if first zone on the HCC80R is for the dining room, the second for the kitchen etc, the HCC80R will send '0' for the dining room zone, '1' for kitchen etc. If for example, the dining room is mapped to Zone 8 on the main evohome controller, and the kitchen is mapped to zone 11, the parameter `ufh_zoneId` needs to be added, e.g:
+
+    {
+        "34:015243": { "name" : "Dining room", "zoneId": 8, "ufh_zoneId":0, "zoneMaster": true },
+        "34:112193": { "name" : "Kitchen UFH", "zoneId": 11, "ufh_zoneId":1, "zoneMaster": true }
+    }
 
 #### Hardware
 **NOTE** The hardware can be purchased **fully assembled**, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), and currently appears to be going for about £20. 
