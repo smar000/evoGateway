@@ -40,7 +40,6 @@ from __future__ import print_function
 import os,sys
 import traceback
 import ConfigParser
-import paho.mqtt.publish as publish
 import paho.mqtt.client as mqtt
 import re
 import serial
@@ -55,7 +54,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.9.5"
+VERSION         = "1.9.6"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -114,6 +113,7 @@ EMPTY_DEVICE_ID   = "--:------"
 
 SYS_CONFIG_COMMAND = "sys_config"
 RESET_COM_PORTS   = "reset_com_ports"
+CANCEL_SEND_COMMANDS ="cancel_commands"
 
 SYSTEM_MSG_TAG = "*"
 #----------------------------------------
@@ -206,7 +206,7 @@ class Command():
     self.command_name = command_name
     self.destination = destination
     self.args = args
-    self.arg_desc = ""
+    self.arg_desc = "[]"
     self.serial_port = serial_port
     self.send_mode = send_mode
     self.send_string = None
@@ -355,19 +355,25 @@ def reset_com_ports():
   for port_id, port in serial_ports.items():
       if port["connection"]:
         display_and_log(SYSTEM_MSG_TAG,"Resetting port '{}'".format(port["connection"].port))
-        port["connection"].port = port["connection"].port
+        # port["connection"].port = port["connection"].port
+        port["connection"].close()
+        time.sleep(2)
+        port["connection"].open()
   display_and_log(SYSTEM_MSG_TAG,"Serial ports have been reset")
 
 # --- MQTT Functions -
 def initialise_mqtt_client(mqtt_client):
-  mqtt_client.username_pw_set(MQTT_USER, MQTT_PW)
+  ''' Initalise the mqtt client object '''
+  if MQTT_USER:
+    mqtt_client.username_pw_set(MQTT_USER, MQTT_PW)
   mqtt_client.on_connect = mqtt_on_connect
   mqtt_client.on_message = mqtt_on_message
-  # mqtt_client.on_log = mqtt_on_log
+  mqtt_client.on_log = mqtt_on_log
   mqtt_client.on_disconnect = mqtt_on_disconnect
+  mqtt_client.is_connected = False # Custom attribute so that we can track connection status
 
   display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt server %s" % MQTT_SERVER)
-  mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=0, bind_address="")
+  mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=60, bind_address="")
 
   display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
   mqtt_client.subscribe(MQTT_SUB_TOPIC)
@@ -375,44 +381,53 @@ def initialise_mqtt_client(mqtt_client):
 
 
 def mqtt_on_connect(client, userdata, flags, rc):
-    ''' mqtt connection event processing '''
-
-    if rc == 0:
-        client.connected_flag = True #set flag
-        display_and_log (SYSTEM_MSG_TAG,"MQTT connection established with broker")
-    else:
-        display_and_log (SYSTEM_MSG_TAG,"MQTT connection failed (code {})".format(rc))
-        if DEBUG:
-            print("[DEBUG] mqtt userdata: {}, flags: {}, client: {}".format(userdata, flags, client))
+  ''' mqtt connection event processing '''
+  if rc == 0:
+      client.is_connected = True #set flag
+      display_and_log (SYSTEM_MSG_TAG,"MQTT connection established with broker")
+  else:
+      client.is_connected = False
+      display_and_log (SYSTEM_MSG_TAG,"MQTT connection failed (code {})".format(rc))
+      if DEBUG:
+          display_and_log(SYSTEM_MSG_TAG, "[DEBUG] mqtt userdata: {}, flags: {}, client: {}".format(userdata, flags, client))
 
 
 def mqtt_on_disconnect(client, userdata, rc):
     ''' mqtt disconnection event processing '''
-
     client.loop_stop()
+    client.is_connected = False
     if rc != 0:
-        print("Unexpected disconnection.")
+        display_and_log(SYSTEM_MSG_TAG, "[WARN] Unexpected disconnection.")
         if DEBUG:
-            print("[DEBUG] mqtt rc: {}, userdata: {}, client: {}".format(rc, userdata, client))
+            display_and_log(SYSTEM_MSG_TAG, "[DEBUG] mqtt rc: {}, userdata: {}, client: {}".format(rc, userdata, client))
 
 
 def mqtt_on_log(client, obj, level, string):
     ''' mqtt log event received '''
     if DEBUG:
-        print("[DEBUG] MQTT log message received. Client: {}, obj: {}, level: {}".format(client, obj, level))
-    print("[DEBUG] MQTT log msg: {}".format(string))
+        display_and_log(SYSTEM_MSG_TAG, "[DEBUG] MQTT log message received. Client: {}, obj: {}, level: {}".format(client, obj, level))
+    display_and_log(SYSTEM_MSG_TAG, "[DEBUG] MQTT log msg: {}".format(string))
 
 
 def mqtt_on_message(client, userdata, msg):
   ''' mqtt message received on subscribed topic '''
   # print(msg.payload)
+  global send_queue
+  global last_sent_command
+
   json_data = json.loads(str(msg.payload))
   # print(json_data)
   log("{: <18} {}".format("MQTT_SUB", json_data))
 
   if SYS_CONFIG_COMMAND in json_data:
-    if json_data[SYS_CONFIG_COMMAND] == RESET_COM_PORTS:
-      command_code, command_name, args, send_mode = get_reset_serialports_command()
+    if json_data[SYS_CONFIG_COMMAND] in RESET_COM_PORTS:
+      new_command = get_reset_serialports_command()
+      new_command.instruction = json.dumps(json_data)
+    elif json_data[SYS_CONFIG_COMMAND] == CANCEL_SEND_COMMANDS:
+      send_queue = []
+      last_sent_command = None
+      display_and_log(SYSTEM_MSG_TAG, "Cancelled all queued outbound commands")
+      return
     else:
       display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
       return
@@ -426,26 +441,67 @@ def mqtt_on_message(client, userdata, msg):
     if command_name or command_code:
         args = json_data["arguments"] if "arguments" in json_data else ""
         send_mode = json_data["send_mode"] if "send_mode" in json_data else None
+    new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))
 
-  new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))
   send_queue.append(new_command)
 
 
 def mqtt_publish(device, command, msg, topic=None):
-  if MQTT_SERVER > "":
-    try:
-        mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-        if not topic:
-        	topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
-        msgs = [(topic, msg, 0, True), ("{}{}".format(topic,"_ts"), timestamp, 0, True)]
-        publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
-        # publish.single(topic, str(msg).strip(), hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
-        # print("published to mqtt topic {}: {}".format(topic, msg))
-    except Exception as e:
-        print(str(e))
-        pass
+  if not mqtt_client.is_connected:
+    display_and_log(SYSTEM_MSG_TAG,"[WARN] MQTT publish failed as client is not connected to broker")
+    return
 
+  try:
+      if not topic:
+        topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
+      timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
+      mqtt_client.publish(topic, msg, 0, True)
+      mqtt_client.publish("{}{}".format(topic,"_ts"), timestamp, 0, True)
+      # print("published to mqtt topic {}: {}".format(topic, msg))
+  except Exception as e:
+      print(str(e))
+      pass
+
+
+
+def mqtt_init_homeassistant():
+    # WIP....
+    # Treat each zone as a HA 'device' with unique_id = zone number, and device name = zone name
+    # HA component structure:
+    # 1. Heating/DHW zone:
+    #   - hvac 
+    #     |- action_topic: 'heating' or 'off' (possibly 'idle') (heat demand > 0?)
+    #     |- modes: current evohome schedule mode; allowed HA options "auto", "off", "heat"
+    #     |- current_temperature_topic: evohome zone temperature
+    #     |- temperature_command_topic: zone setpoint 
+    #     |- temperature_state_topic: this monitors zone setpoint target as reported by the controller i.e. our setpoint_CTL temperatures
+    #     |- away_mode_state_topic: as we can't set away mode in modes, may need to use this
+    #     |- min_temp, max_temp, temp_step: min/max/step for the zone
+    #     |- device, unique_id: use this for the evohome zone; only one hvac device allowed per unique_id
+    #   - sensor (non relays, e.g. HR91 TRVs, Thermostats etc):
+    #     |- zone level heat demand 
+    #     |- <zone_individual_device>_temperature (e.g. TRV)
+    #     |- <zone_individual_device>_heat_demand
+    #     |- <zone_individual_device>_window_status
+    #     |- <zone_individual_device>_battery
+    #     |- <zone_individual_device>_setpoint_override
+    # 2. BDR Relays, UFH controller:
+    #     - sensor
+    #     |- actuator_status
+    #     |- actuator_status_ts
+    #     |- heat_demand
+    #     |- heat_demand_ts   
+    # 3. Controller:
+    #     - sensor
+    #     |- command
+    #     |- sent_command
+    #     |- sent_command_ts
+    #     |- sent_command_ack
+    #     |- sent_command_ack_ts
+    #     |- sent_command_failed
+    #     |- sent_command_ack_ts
+    #     |- send_command_last_retry_ts
+    pass
 
 def init_homie():
     # WIP....
@@ -501,8 +557,6 @@ def init_homie():
 
     msgs.append (("{}/$nodes".format(topic_base), ",".join(nodes_list), 0, True))
     msgs += node_msgs
-    # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-    # publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="test",keepalive=60, auth=mqtt_auth)
     return msgs
 
 def get_homie_node_topics(node_topic, node_property):
@@ -564,12 +618,14 @@ def process_received_message(data, port_tag=None):
                 log('{: <18} {}'.format(msg.command_name, data), port_tag)
             except Exception as e:
                 display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
-                traceback.print_exc()
+                traceback.format_exc()
                 # display_and_log("ERROR",msg.command_name + ": " + repr(e) + ": " + data)
             return msg
         else:
-            display_and_log("UNKNOWN COMMAND","Command code: {}, Payload: {}".format(msg.command_code, msg.payload), port_tag)
-            log("UNKNOWN COMMAND: {}".format(data), port_tag)
+            msg.command_name = "UNKNOWN COMMAND"
+            display_data_row(msg, "Command code: {}, Payload: {}".format(msg.command_code, msg.payload))
+            # display_and_log("UNKNOWN COMMAND","Command code: {}, Payload: {}".format(msg.command_code, msg.payload), port_tag)
+            # log("UNKNOWN COMMAND: {}".format(data), port_tag)
     else:
         display_and_log("ERROR","Pattern match failed on received data: '{}' (port: {})".format(data, port_tag))
         return None
@@ -814,10 +870,11 @@ def zone_heat_demand(msg):
                         break
             else:
                 display_and_log("ERROR","UFH message received, but destination is neither main controller nor UFH controller. \
-                destination = {}, destination_type = {}. msg: {} ".format(msg.destination, msg.destination_type, msg.rawmsg))
+                  destination = {}, destination_type = {}. msg: {} ".format(msg.destination, msg.destination_type, msg.rawmsg))
 
         demand_percentage = float(demand)/200*100
         display_data_row(msg, "{:6.1f}%".format(demand_percentage), zone_id)
+
         if len(topic) > 0:
             mqtt_publish(topic,"heat_demand",demand_percentage)
         else:
@@ -877,7 +934,7 @@ def actuator_state(msg):
 
 
 def dhw_state(msg):
-  if msg.payload_length == 1 and msg.msg_type =="RQ":
+  if msg.payload_length == 1 and (msg.msg_type == "RQ" or msg.msg_type == "I"):
     display_and_log(msg.command_name, "Request sent: {}".format(msg.payload))
     return
 
@@ -924,6 +981,14 @@ def dhw_state(msg):
 
 
 def dhw_temperature(msg):
+  if msg.payload_length == 1:
+    # This is most likely an outbound request
+    return
+
+  if msg.payload_length != 3:
+    display_and_log(msg.command_name, "Invalid payload length of {} (should be 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+    return
+
   temperature = float(int(msg.payload[2:6],16))/100
   display_data_row(msg, "{:5.2f}°C".format(temperature))
   mqtt_publish("DHW", "temperature", temperature)
@@ -1065,9 +1130,9 @@ def process_send_command(command):
           if command.send_mode is None:
               command.send_mode = "W"
           if until:
-            command.arg_desc ="{} until {}".format("ON" if state_id == 1 else "OFF", until)
+            command.arg_desc ="[{} until {}]".format("ON" if state_id == 1 else "OFF", until)
           else:
-            command.arg_desc ="{}".format("ON" if state_id == 1 else "OFF")
+            command.arg_desc ="[{}]".format("ON" if state_id == 1 else "OFF")
 
       elif (command.command_name and command.command_name in "date_request ping") or (command.command_code and command.command_code == "313F"):
           # 0x313F: Send a datetime update request, i.e. like a ping
@@ -1085,7 +1150,7 @@ def process_send_command(command):
           if command.send_mode is None:
               command.send_mode = "W"
           if until:
-            command.arg_desc = "{} until {}".format(mode, until)
+            command.arg_desc = "[{} until {}]".format(mode, until)
           else:
             command.arg_desc = mode
 
@@ -1098,9 +1163,9 @@ def process_send_command(command):
           if command.send_mode is None:
               command.send_mode = "W"
           if until:
-            command.arg_desc = "{} degC until {} for zone {}".format(setpoint, until, zones[zone_id] if zone_id in zones else zone_id)
+            command.arg_desc = "['{}': {} degC until {}]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint, until)
           else:
-            command.arg_desc = command.arg_desc = "{} degC for zone {}".format(setpoint, zones[zone_id] if zone_id in zones else zone_id)
+            command.arg_desc = command.arg_desc = "['{}': {} deg C]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint)
   else:
       command.payload = command.args["payload"]
       if command.send_mode is None:
@@ -1182,35 +1247,30 @@ def send_command_to_evohome(command):
   log_row = "{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string)
   log('{: <18} {}'.format("COMMAND_OUT", log_row))
   # display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
-  if command.arg_desc:
-    display_and_log("COMMAND_OUT","{}: Sending command with arguments '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.arg_desc))
-  else:
-    display_and_log("COMMAND_OUT","{}: Sending command to controller".format(command.command_name.upper() if command.command_name is not None else "-None-"))
 
   byte_command = bytearray(b'{}\r\n'.format(command.send_string))
   response = serial_port.write(byte_command)
 
-  timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
-  mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-  # topic_base = "{}/{}".format(MQTT_PUB_TOPIC, to_snake("{}_{}".format(THIS_GATEWAY_TYPE, THIS_GATEWAY_NAME)))
-  # topic = "{}/{}".format(SENT_COMMAND_TOPIC, SENT_COMMAND_SUBTOPIC)
+  display_and_log("COMMAND_OUT","{} {} Command SENT".format(command.command_name.upper() if command.command_name is not None else "-None-",
+    command.arg_desc if command.arg_desc !="[]" else ":"))
 
-  # ("{}/{}".format(topic_base, MQTT_SUB_TOPIC.split("/")[-1]), "", 0, True),
-  msgs = [
-    ("{}/command".format(SENT_COMMAND_TOPIC), "{} {}".format(command.command_name, command.args), 0, True),
-    ("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True),
-    ("{}/ack".format(SENT_COMMAND_TOPIC),False, 0, True),
-    ("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True),
-    ("{}/retry_ts".format(SENT_COMMAND_TOPIC), "", 0, True),
-    ("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True),
-    ("{}/org_instruction".format(SENT_COMMAND_TOPIC), command.command_instruction, 0, True),
-    (MQTT_SUB_TOPIC, "", 0, True)]
-  if command.retries == 0:
-    msgs.append (("{}/initial_sent_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True))
+  if mqtt_client.is_connected:
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
+    mqtt_client.publish("{}/command".format(SENT_COMMAND_TOPIC), "{} {}".format(command.command_name, command.args), 0, True)
+    mqtt_client.publish("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True)
+    mqtt_client.publish("{}/ack".format(SENT_COMMAND_TOPIC),False, 0, True)
+    mqtt_client.publish("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True)
+    mqtt_client.publish("{}/retry_ts".format(SENT_COMMAND_TOPIC), "", 0, True)
+    mqtt_client.publish("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True)
+    mqtt_client.publish("{}/org_instruction".format(SENT_COMMAND_TOPIC), command.command_instruction, 0, True)
+    mqtt_client.publish(MQTT_SUB_TOPIC, "", 0, True)
+    if command.retries == 0:
+      mqtt_client.publish("{}/initial_sent_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True)
+    else:
+      mqtt_client.publish("{}/last_retry_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True)
   else:
-    msgs.append (("{}/last_retry_ts".format(SENT_COMMAND_TOPIC), timestamp, 0, True))
+    display_and_log(SYSTEM_MSG_TAG,"[WARN] Client not connected to MQTT broker. No command status messages posted")
 
-  publish.multiple(msgs, hostname=MQTT_SERVER, port=1883, client_id="MQTT_CLIENTID",keepalive=60, auth=mqtt_auth)
   if command.retries ==  0:
     command.send_dtm = datetime.datetime.now()
   command.retry_dtm = datetime.datetime.now()
@@ -1227,16 +1287,13 @@ def check_previous_command_sent(previous_command):
     seconds_since_sent = (datetime.datetime.now() - previous_command.retry_dtm).total_seconds()
 
     if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
-      display_and_log("COMMAND_OUT","{}: Command NOT acknowledged. Resending attempt {} of {}...".format(
-        previous_command.command_name, previous_command.retries, COMMAND_RESEND_ATTEMPTS))
+      display_and_log("COMMAND_OUT","{} {} Command NOT acknowledged. Resending attempt {} of {}...".format(
+        previous_command.command_name.upper(), previous_command.arg_desc if previous_command.arg_desc != "[]" else ":", previous_command.retries, COMMAND_RESEND_ATTEMPTS))
       previous_command = send_command_to_evohome(previous_command)
   else:
     if not previous_command.send_failed:
       previous_command.send_failed = True
-      mqtt_publish(SENT_COMMAND_TOPIC,"command_sent_failed",True)
-      # mqtt_auth={'username': MQTT_USER, 'password':MQTT_PW}
-      # topic = "{}/{}/command_sent_failed".format(MQTT_PUB_TOPIC, to_snake(THIS_GATEWAY_NAME))
-      # publish.single(topic, True, hostname=MQTT_SERVER, auth=mqtt_auth,client_id=MQTT_CLIENTID,retain=True)
+      mqtt_publish("","command_sent_failed",True,SENT_COMMAND_TOPIC)
       display_and_log("COMMAND","ERROR: Previously sent command '{}' failed to send. No ack received from controller".format(previous_command.command_name))
 
       if AUTO_RESET_PORTS_ON_FAILURE:
@@ -1255,7 +1312,7 @@ COMMANDS = {
   '0418': device_info,
   '1060': battery_info,
   '10A0': dhw_settings,
-  '10e0': heartbeat,
+  '10E0': heartbeat,
   '1260': dhw_temperature,
   '12B0': window_status,
   '1F09': sync,
@@ -1284,7 +1341,7 @@ COMMAND_CODES = {
   "dhw_state" : "1F41",
   "dhw_temperature" : "1260",
   "external_sensor": "0002",
-  "heartbeat" : "10e0",
+  "heartbeat" : "10E0",
   "other_command" : "0100",
   "ping" : "313F",
   "relay_heat_demand" : "0008",
@@ -1405,7 +1462,8 @@ while ports_open:
                   mqtt_publish("", "", True, "{}/ack".format(SENT_COMMAND_TOPIC))
                   last_sent_command.send_acknowledged = True
                   last_sent_command.send_acknowledged_dtm = datetime.datetime.now()
-                  display_and_log("COMMAND_OUT","{}: Command acknowledged by controller".format(last_sent_command.command_name.upper()))
+                  display_and_log("COMMAND_OUT","{} {} Command ACKNOWLEDGED".format(last_sent_command.command_name.upper(),
+                    last_sent_command.arg_desc if last_sent_command.arg_desc != "[]" else ":"))
                 prev_data_had_errors = False
               else:
                   if not prev_data_had_errors and LOG_DROPPED_PACKETS:
