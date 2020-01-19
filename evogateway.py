@@ -127,14 +127,14 @@ class TwoWayDict(dict):
         dict.__setitem__(self, value, key)
 
 DEVICE_TYPE = TwoWayDict()
-DEVICE_TYPE["01"] = "CTL"
-DEVICE_TYPE["02"] = "UFH"
-DEVICE_TYPE["04"] = "TRV"
-DEVICE_TYPE["07"] = "DHW"
-DEVICE_TYPE["13"] = "BDR"
-DEVICE_TYPE["30"] = "GWAY"
-DEVICE_TYPE["34"] = "STAT"
-# Type 30 is a Mobile Gateway such as RGS100
+DEVICE_TYPE["01"] = "CTL"  # Main evohome touchscreen controller
+DEVICE_TYPE["02"] = "UFH"  # Underfloor controller, HCC80R or HCE80
+DEVICE_TYPE["03"] = "STAT" # Wireless thermostat -  HCW82
+DEVICE_TYPE["04"] = "TRV"  # Radiator TRVs, e.g. HR92
+DEVICE_TYPE["07"] = "DHW"  # Hotwater wireless Sender
+DEVICE_TYPE["13"] = "BDR"  # BDR relays
+DEVICE_TYPE["30"] = "GWAY" # Mobile Gateway such as RGS100
+DEVICE_TYPE["34"] = "STAT" # Wireless round thermostats T87RF2033 or part of Y87RF2024 
 
 
 CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "Day Off", 7:"Custom"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
