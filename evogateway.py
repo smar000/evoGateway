@@ -18,6 +18,8 @@
 # Also see http://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80
 # for info and discussions on homebrew hardware options.
 #
+# Details on the evohome protocol can be found here: https://github.com/Evsdd/The-Evohome-Protocol/wiki
+#
 # The arduino nano I am using is running a firmware modded by ghoti57 available
 # from https://github.com/ghoti57/evofw2, who had forked it from
 # codeaholics, https://github.com/Evsdd, who in turn had forked it  from
@@ -312,7 +314,7 @@ def log(logentry, port_tag="-"):
         rotate_files(LOG_FILE)
         logfile = open(LOG_FILE,"a")
 
-  logfile.write("{}: {}: {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_tag, logentry.strip()))
+  logfile.write("{} |{}| {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_tag, logentry.rstrip()))
   file.flush(logfile)
 
 
@@ -1469,7 +1471,7 @@ while ports_open:
                   if not prev_data_had_errors and LOG_DROPPED_PACKETS:
                       prev_data_had_errors = True
                       display_and_log("ERROR","--- Message dropped: packet error from hardware/firmware", port["tag"])
-                  log(data_row, port["tag"])
+                  log("{: <18} {}".format("", data_row), port["tag"])
               file.flush(logfile)
               data_row_stack.append(stack_entry)
               if len(data_row_stack) > MAX_HISTORY_STACK_LENGTH:
