@@ -282,7 +282,7 @@ def display_data_row(msg, display_text, ref_zone=-1, suffix_text=""):
   destination = "BROADCAST MESSAGE" if msg.is_broadcast() else msg.destination_name
   if ref_zone >-1:
     zone_name = "@ {:<20}".format(zones[ref_zone]) if ref_zone in zones else "                      "
-    display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {} [Zone {:<3] {}".format(
+    display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {} [Zone {:<3}] {}".format(
         msg.msg_type, msg.source_name, destination, display_text, zone_name, ref_zone, suffix_text)
   else:
     display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {}".format(msg.msg_type, msg.source_name, destination, display_text, suffix_text)
