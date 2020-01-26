@@ -56,7 +56,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.9.6"
+VERSION         = "1.9.7"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -620,8 +620,7 @@ def process_received_message(data, port_tag=None):
                 log('{: <18} {}'.format(msg.command_name, data), port_tag)
             except Exception as e:
                 display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
-                traceback.format_exc()
-                # display_and_log("ERROR",msg.command_name + ": " + repr(e) + ": " + data)
+                print(traceback.format_exc())
             return msg
         else:
             msg.command_name = "UNKNOWN COMMAND"
