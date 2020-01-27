@@ -56,7 +56,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.9.7"
+VERSION         = "1.9.8"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -110,7 +110,7 @@ AUTO_RESET_PORTS_ON_FAILURE = getConfig(config,"SENDER", "AUTO_RESET_PORTS_ON_FA
 
 MAX_LOG_HISTORY   = getConfig(config,"SENDER", "MAX_LOG_HISTORY",3)
 
-MAX_HISTORY_STACK_LENGTH = 5
+MAX_HISTORY_STACK_LENGTH = 10
 EMPTY_DEVICE_ID   = "--:------"
 
 SYS_CONFIG_COMMAND = "sys_config"
@@ -855,7 +855,7 @@ def zone_heat_demand(msg):
             # zone_id must therefore be the ufh controller zones, and valued 0 to 7.
             ufh_zone_id = zone_id - 1 # 1 was added in the get_zone_details fn above as ufh subzones zero based
             if msg.destination_type == DEVICE_TYPE['CTL']:
-                device_type = "UFH " + zone_name.split(' ', 1)[1]
+                device_type = "UFH {}".format(zone_name.split(' ', 1)[1] if " " in zone_name else zone_name)
                 topic = zone_name
             elif msg.is_broadcast(): # the zone_id refers to the UFH controller zone, and not the main evohome controller zone
                 # zone_id in this refers to the ufh zone id, and so zone_name etc need to be corrected
@@ -1452,7 +1452,6 @@ while ports_open:
           data_row = serial_port.readline().strip()
           if data_row:
             stack_entry = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), data_row)
-
             # Make sure it is not a duplicate message (e.g. received through additional listener/gateway devices)
             if stack_entry not in data_row_stack:
               msg = process_received_message(data_row, port["tag"])
