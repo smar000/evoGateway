@@ -25,6 +25,8 @@
 # codeaholics, https://github.com/Evsdd, who in turn had forked it  from
 # fulltalgoRythm's orignal firmware, https://github.com/fullTalgoRythm/EvohomeWirelessFW.
 #
+# OpenTherm protocol decoding taken from https://github.com/Evsdd/The-Evohome-Protocol/wiki/3220:-OpenTherm-Message
+#
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -56,7 +58,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.9.8"
+VERSION         = "1.10.0"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -132,10 +134,21 @@ DEVICE_TYPE["02"] = "UFH"  # Underfloor controller, HCC80R or HCE80
 DEVICE_TYPE["03"] = "STAT" # Wireless thermostat -  HCW82
 DEVICE_TYPE["04"] = "TRV"  # Radiator TRVs, e.g. HR92
 DEVICE_TYPE["07"] = "DHW"  # Hotwater wireless Sender
+DEVICE_TYPE["10"] = "OTB"  # OpenTherm Bridge
 DEVICE_TYPE["13"] = "BDR"  # BDR relays
 DEVICE_TYPE["30"] = "GWAY" # Mobile Gateway such as RGS100
 DEVICE_TYPE["34"] = "STAT" # Wireless round thermostats T87RF2033 or part of Y87RF2024 
 
+OPENTHERM_MSG_TYPES = {
+      0: "Read-Data",       # 0b.000....
+     16: "Write-Data",      # 0b.001....
+     32: "Invalid-Data",    # 0b.010....
+     48: "-reserved-",      # 0b.011....
+     64: "Read-Ack",        # 0b.100....
+     80: "Write-Ack",       # 0b.101....
+     96: "Data-Invalid",    # 0b.110....
+    112: "Unknown-DataId",  # 0b.111....
+}
 
 CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "Day Off", 7:"Custom"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
 
@@ -157,6 +170,7 @@ class Message():
     self.device3_type = rawmsg[31:33]               # device 3 type
     self.device3_name = self.device3
 
+
     if self.device2 == EMPTY_DEVICE_ID:
         self.destination = self.device3
         self.destination_type = self.device3_type
@@ -164,6 +178,15 @@ class Message():
         self.destination = self.device2
         self.destination_type = self.device2_type
     self.destination_name = self.destination
+
+    # There seem to be some OpenTherm messages without a source/device2; just device3. 
+    # Could be firmware issue with source/dest swapped? For now, let's swap over and see...
+    if self.source == EMPTY_DEVICE_ID and self.device3 != EMPTY_DEVICE_ID:
+      self.source = self.device3
+      self.source_type = self.device3_type
+      self.device3 = rawmsg[11:20]
+      self.devic3_type =rawmsg[11:13]
+
     self._initialise_device_names()
 
     self.command_code = rawmsg[41:45].upper()       # command code hex
@@ -280,12 +303,12 @@ def get_dtm_from_packed_hex(dtm_hex):
 
 def display_data_row(msg, display_text, ref_zone=-1, suffix_text=""):
   destination = "BROADCAST MESSAGE" if msg.is_broadcast() else msg.destination_name
-  if ref_zone >-1:
+  if ref_zone > -1:
     zone_name = "@ {:<20}".format(zones[ref_zone]) if ref_zone in zones else "                      "
-    display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {} [Zone {:<3}] {}".format(
+    display_row = "{:<2}| {:<22} -> {:<22} | {:>5} {} [Zone {:<3}] {}".format(
         msg.msg_type, msg.source_name, destination, display_text, zone_name, ref_zone, suffix_text)
   else:
-    display_row = "{:<2}| {:<21} -> {:<21} | {:>5} {}".format(msg.msg_type, msg.source_name, destination, display_text, suffix_text)
+    display_row = "{:<2}| {:<22} -> {:<22} | {:>5} {}".format(msg.msg_type, msg.source_name, destination, display_text, suffix_text)
   display_and_log(msg.command_name, display_row, msg.port)
 
 
@@ -317,6 +340,18 @@ def log(logentry, port_tag="-"):
   logfile.write("{} |{}| {}\n".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_tag, logentry.rstrip()))
   file.flush(logfile)
 
+
+def parity(x):
+    shiftamount = 1
+    while x >> shiftamount:
+        x ^= x >> shiftamount
+        shiftamount <<= 1
+    return x & 1
+
+
+def convert_from_twos_comp(hex_val, divisor=100):
+  """ Converts hex string of 2's complement """
+  return float(int(hex_val[0:2],16) << 8 | int(hex_val[2:4],16))/divisor
 
 # Init com ports
 def init_com_ports():
@@ -649,7 +684,7 @@ def get_zone_details(payload, source_type=None):
         else:
             zone_name ="BDR DHW Relay"
     elif zone_id == 0xfc:    # Boiler relay or possibly broadcast
-        zone_name  = "BDR Boiler Relay"
+      zone_name = "OTB OpenTherm Bridge" if filter(lambda k: "10:" in k, devices.keys()) else "BDR Boiler Relay"
     elif zone_id == 0xf9:  # Radiator circuit zone valve relay
         zone_name ="BDR Radiators Relay"
     elif zone_id == 0xc: # Electric underfloor relay
@@ -737,7 +772,7 @@ def setpoint(msg):
         zone_name = zones[zone_id] if zone_id in zones else "Zone {}".format(zone_id)
 
         # display_and_log("DEBUG","Setpoint: zone not found for zone_id " + str(zone_id) + ", MSG: " + msg.rawmsg)
-        zone_setpoint = float(int(zone_data[2:4],16) << 8 | int(zone_data [4:6],16))/100
+        zone_setpoint = convert_from_twos_comp(zone_data[2:6]) #float(int(zone_data[2:4],16) << 8 | int(zone_data [4:6],16))/100
         if (zone_setpoint >= 300.0): # Setpoint of 325 seems to be the number sent when TRV manually switched to OFF. Use >300 to avoid rounding errors etc
             zone_setpoint = 0
             flag = " *(Heating is OFF)"
@@ -754,7 +789,7 @@ def setpoint_override(msg):
     display_and_log(msg.command_name, "Invalid payload length of {} (should be 7 or 13). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
   else:
     zone_id, zone_name, topic = get_zone_details(msg.payload[0:2])
-    new_setpoint = float(int(msg.payload[2:4],16) << 8 | int(msg.payload [4:6],16))/100
+    new_setpoint = convert_from_twos_comp(msg.payload[2:6]) #float(int(msg.payload[2:4],16) << 8 | int(msg.payload [4:6],16))/100
 
     #!!TODO!! Trap for 0x7FFF - this means setpoint not set
     if msg.payload_length == 13: # We have an 'until' date
@@ -917,21 +952,29 @@ def actuator_check_req(msg):
 
 def actuator_state(msg):
   if msg.payload_length == 1 and msg.msg_type == "RQ":
-    display_data_row(msg, "State update request")
-  elif msg.payload_length != 3:
-    display_and_log(msg.command_name, "Invalid payload length of {} (should be 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+    display_data_row(msg, "Request actuator state update")
+  elif msg.payload_length % 3 != 0:
+    display_and_log(msg.command_name, "Invalid payload length of {} (should be mod 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
   else:
     device_number = int(msg.payload[0:2],16) # Apparently this is always 0 and so invalid
     demand = int(msg.payload[2:4],16)   # (0 for off or 0xc8 i.e. 100% for on)
 
-    if demand == 0xc8:
-        status = "ON"
-    elif demand == 0:
-        status ="OFF"
-    else:
-        status = "Unknown: " + str(demand)
-    display_data_row(msg, "{:>7}".format(status))
-    mqtt_publish("relays/{}".format(msg.source_name),"actuator_status",status)
+    if msg.source_type == DEVICE_TYPE["OTB"] and msg.payload_length == 6: # OpenTherm 
+      rel_modulation = float(int(msg.payload[2:4],16))    
+      flame = "ON" if int(msg.payload[6:8], 16) == 0x0A else "OFF"
+      status = "{:5.0f}%  : Relative modulation (Flame: {})".format(rel_modulation, flame)
+      mqtt_publish("relays/{}/actuator_state".format(msg.source_name), "relative_modulation",rel_modulation)
+      mqtt_publish("relays/{}/actuator_state".format(msg.source_name), "flame", flame)
+      display_data_row(msg, "{:>7}".format(status))
+    else: # Normal relays
+      if demand == 0xc8:
+          status = "ON"
+      elif demand == 0:
+          status ="OFF"
+      else:
+          status = "Unknown: " + str(demand)
+      display_data_row(msg, "{:>7}".format(status))
+      mqtt_publish("relays/{}".format(msg.source_name),"actuator_status",status)
 
 
 def dhw_state(msg):
@@ -1015,6 +1058,26 @@ def zone_info(msg):
         i += 12
 
 
+def language(msg):
+    """ Language localisation setting (iso-639 format)
+        https://github.com/Evsdd/The-Evohome-Protocol/wiki/0100:-Localisation-(language)
+        Supported lanauges: English - en, Deutsch - nl, Italiano - it, Francais - fr, Nederlands, Espanol - es, 
+                            Polski - pl, Cesky - cs, Magyar - hu, Romana - ro, Slovencina - sk & Dansk - da.
+    """
+    if msg.payload_length != 5:
+        display_and_log(msg.command_name, "Invalid payload length of {} (should be 5). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+        return
+    try:
+        assert msg.payload[:2] == "00", "Invalid payload '{}' (must start with '00')".format(msg.payload)
+        assert msg.payload[8:] == "FF", "Invalid payload '{}' (must end with 'FF')".format(msg.payload)
+        iso_code_ascii = msg.payload[2:6] if msg.payload[4:6] != "FF" else msg.payload[2:4]
+        iso_code =  bytearray.fromhex(iso_code_ascii).replace("\x00","").replace("\xff","").decode("utf-8")
+        display_data_row(msg, "{} ({})".format(iso_code, iso_code_ascii))
+    except Exception as e:
+        display_and_log ("ERROR", "'{}' on line {} [Command {}, payload: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, msg.payload, msg.port))
+        print(traceback.format_exc())
+
+
 def device_info(msg):
     if msg.payload_length == 3:
         display_and_log(msg.command_name, "Device information requested: {}".format(msg.payload))
@@ -1023,8 +1086,7 @@ def device_info(msg):
         display_and_log(msg.command_name, "Invalid payload length of {} (should be mod 22). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
         return
     display_data_row(msg, msg.rawmsg)
-    # display_and_log(msg.command_name, msg.rawmsg)
-
+    
 
 def battery_info(msg):
   if msg.payload_length != 3:
@@ -1048,6 +1110,91 @@ def battery_info(msg):
     display_data_row(msg, "{:.1f}% (device ID {})".format(battery, device_id), zone_id, warning)
     topic = "dhw" if zone_id == 250 else zones[zone_id]
     mqtt_publish("{}/{}".format(topic, msg.source_name),"battery",battery)
+
+
+def opentherm_msg(msg):
+  if msg.payload_length != 5:
+    display_and_log(msg.command_name, "Invalid payload length of {} (should be 5). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+    return
+  
+  # [0:2] are unused - always 00
+  msg_type_id = int(msg.payload[2:4], 16) & 0x70            # OT message type 
+  msg_type = OPENTHERM_MSG_TYPES[msg_type_id] if OPENTHERM_MSG_TYPES[msg_type_id] else msg_type_id
+  data_id = int(msg.payload[4:6], 16)                       # OT command ID
+  data_value = msg.payload[6:10]                            # Command response value
+  zone_id = devices[msg.source]["zoneId"]
+
+  if not int(msg.payload[2:4], 16) // 0x80 == parity(int(msg.payload[2:], 16) & 0x7FFFFFFF):      
+    display_data_row(msg, "Parity error. Msg type_id: {} ({}) id: {}, value: {}".format(msg_type_id, msg_type, data_id, data_value))
+  elif not int(msg.payload[2:4], 16) & 0x0F == 0:           # valid for v2.2 of the protocol
+    display_data_row(msg, "Protocol error. Msg type_id: {} ({}), id: {}, value: {}".format(msg_type_id, msg_type, data_id, data_value))
+  else:
+    # The OT command response is in byte 4 and 5
+    value_int = convert_from_twos_comp(msg.payload[6:10],1)  #int(msg.payload[6:8],16) << 8 | int(msg.payload[8:10],16)
+    value_float = float(value_int) / 256.0
+
+    #  OT commands are as per the OT Specification
+    status = ""
+    data ={}                                                # Use dict in case of multiple data/value pairs for single OT ID (e.g. ID 5)
+    if data_id == 5:
+      # 05 (ID.05) = Fault Code
+      data["app_specific_flags"] = msg.payload[6:8]
+      data["oem_fault_code"] = msg.payload[8:10]
+      status = "{:2}/{:2}   : Application Specific Flags/OEM Fault Code".format(data["app_specific_flags"], data["oem_fault_code"]) if msg_type_id > 0 else "Request App specific flags/OEM fault code"
+    elif data_id == 17:
+      # 11 (ID.17) = Relative modulation level
+      data["relative_modulation"] = value_float 
+      status = "{:5.1f}%  : Relative modulation".format(value_float) if msg_type_id > 0 else "Request Relative Modulation value"
+      
+    elif data_id == 18:
+      # 12 (ID.18) = CH water pressure
+      status = "{:5.1f}   : CH Water Pressure (bar)".format(value_float) if msg_type_id > 0 else "Request CH Water Pressure"
+      data["ch_water_pressure"] = value_float
+    elif data_id == 19: 
+      # 13 (ID.19) = DHW flow rate
+      status = "{:5.1f}   : DHW flow rate (l/min)".format(value_float) if msg_type_id > 0 else "Request DHW Flow Rate"
+      data["dhw_flow_rate"] = value_float
+    elif data_id == 25:
+      # 19 (ID.25) = Boiler Water Temperature
+      status = "{:5.1f}°C : Flow Water Temperature".format(value_float) if msg_type_id > 0 else "Request Boiler Flow Water Temperature"
+      data["boiler_temperature"] = value_float
+    elif data_id == 26:
+      # 1A (ID.26) = DHW Temperature
+      status = "{:5.1f}°C : DHW Temperature".format(value_float)  if msg_type_id > 0 else "Request DHW Temperature"
+      data["dhw_temperature"] = value_float
+    elif data_id == 28:
+      # 1C (ID.28) = Return Water Temperature
+      status = "{:5.1f}°C : Return Water Temperature".format(value_float)  if msg_type_id > 0 else "Request Boiler Return Water Temperature"
+      data["return_water_temperature"] = value_float
+    elif data_id == 115:
+      # 73 (ID.115) = OEM diagnostic code
+      status = "{:5.1f}   : OEM diagnostic code".format(value_int) if msg_type_id > 0 else "Request OEM Diagnostic code"
+      data["oem_diagnostic_code"] = value_int
+    
+    if status:
+      display_data_row(msg, status)           
+      if msg_type_id > 0:
+        for key, value in data.items():
+          mqtt_publish("relays/{}".format(msg.source_name), key, value)
+    else:
+      display_data_row(msg, "Message Data ID not recognised. Type: {} ({}), Data ID: {}, value: {}".format(msg_type, msg_type_id, data_id, data_value))
+
+
+def opentherm_ticker(msg):
+  pass
+
+
+def boiler_setpoint(msg):
+  if msg.payload_length == 1 and msg.msg_type == "RQ":
+    display_data_row(msg, "Setpoint update request") 
+    return
+  elif msg.payload_length != 3:
+    display_and_log(msg.command_name, "Invalid payload length of {} (should be 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+    return
+  
+  setpoint = float(int(msg.payload[2:6],16))/100
+  display_data_row(msg, "Boiler setpoint: {}".format(setpoint)) 
+  mqtt_publish("Relays/{}".format(msg.source_name),"boiler_setpoint", setpoint)
 
 
 def controller_mode(msg):
@@ -1088,6 +1235,7 @@ def unknown_command(msg):
 
 def get_reset_serialports_command():
    return Command(SYS_CONFIG_COMMAND, RESET_COM_PORTS)
+
 
 # --- evohome send command functions
 def process_send_command(command):
@@ -1252,7 +1400,7 @@ def send_command_to_evohome(command):
   byte_command = bytearray(b'{}\r\n'.format(command.send_string))
   response = serial_port.write(byte_command)
 
-  display_and_log("COMMAND_OUT","{} {} Command SENT".format(command.command_name.upper() if command.command_name is not None else "-None-",
+  display_and_log("COMMAND_OUT","{} {} Command SENT".format(command.command_name.upper() if command.command_name is not None else command.command_code,
     command.arg_desc if command.arg_desc !="[]" else ":"))
 
   if mqtt_client.is_connected:
@@ -1289,7 +1437,8 @@ def check_previous_command_sent(previous_command):
 
     if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
       display_and_log("COMMAND_OUT","{} {} Command NOT acknowledged. Resending attempt {} of {}...".format(
-        previous_command.command_name.upper(), previous_command.arg_desc if previous_command.arg_desc != "[]" else ":", previous_command.retries, COMMAND_RESEND_ATTEMPTS))
+        previous_command.command_name.upper() if previous_command.command_name else previous_command.command_code, 
+        previous_command.arg_desc if previous_command.arg_desc != "[]" else ":", previous_command.retries, COMMAND_RESEND_ATTEMPTS))
       previous_command = send_command_to_evohome(previous_command)
   else:
     if not previous_command.send_failed:
@@ -1309,7 +1458,7 @@ COMMANDS = {
   '0006': schedule_sync,
   '0008': relay_heat_demand,
   '000A': zone_info,
-  '0100': other_command,
+  '0100': language,
   '0418': device_info,
   '1060': battery_info,
   '10A0': dhw_settings,
@@ -1319,13 +1468,16 @@ COMMANDS = {
   '1F09': sync,
   '1F41': dhw_state,
   '1FC9': bind,
+  '1FD4': opentherm_ticker,
   '22C9': setpoint_ufh,
+  '22D9': boiler_setpoint,
   '2309': setpoint,
   '2349': setpoint_override,
   '2E04': controller_mode,
   '30C9': zone_temperature,
   '313F': date_request,
   '3150': zone_heat_demand,
+  '3220': opentherm_msg,
   '3B00': actuator_check_req,
   '3EF0': actuator_state
 }
@@ -1336,6 +1488,7 @@ COMMAND_CODES = {
   "actuator_state" : "3EF0",
   "battery_info" : "1060",
   "bind" : "1FC9",
+  "boiler_setpoint" : "22D9",
   "controller_mode" : "2E04",
   "date_request" : "313F",
   "device_info" : "0418",
@@ -1343,6 +1496,9 @@ COMMAND_CODES = {
   "dhw_temperature" : "1260",
   "external_sensor": "0002",
   "heartbeat" : "10E0",
+  "language"  : "0100",
+  "opentherm_msg" : "3220",
+  "opentherm_ticker" : "1fd4",
   "other_command" : "0100",
   "ping" : "313F",
   "relay_heat_demand" : "0008",
@@ -1420,7 +1576,7 @@ mqtt_client = mqtt.Client()
 initialise_mqtt_client(mqtt_client)
 
 prev_data_had_errors = False
-data_pattern = re.compile("^--- ( I| W|RQ|RP) --- \d{2}:\d{6} (--:------ |\d{2}:\d{6} ){2}[0-9a-fA-F]{4} \d{3}")
+data_pattern = re.compile("^--- ( I| W|RQ|RP) --- (--:------|\d{2}:\d{6}) (--:------ |\d{2}:\d{6} ){2}[0-9a-fA-F]{4} \d{3}")
 data_row_stack = deque()
 last_sent_command = None
 ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items()) # ports_open var also updated in fn close_com_ports

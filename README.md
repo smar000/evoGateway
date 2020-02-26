@@ -3,11 +3,13 @@
 ![alt text](./evogateway.png "evoListener screenshot")
 
 
-***Update 28/08/19***: Added auto-retry for failed sending of commands; added send command status updates to mqtt topic; added custom send commands capability.
+***Update 28/08/2019***: Added auto-retry for failed sending of commands; added send command status updates to mqtt topic; added custom send commands capability.
 
-***Update 25/5/19***: "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
+***Update 25/5/2019***: "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
 
-***Update 18/1/20***: Updated README to include HCC80R zone definition 
+***Update 18/1/2020***: Updated README to include HCC80R zone definition 
+
+***Update 25/2/2020***: Added OpenTherm decoding
 
 ---
 
