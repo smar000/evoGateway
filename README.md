@@ -11,6 +11,9 @@
 
 ***Update 25/2/2020***: Added OpenTherm decoding
 
+***Update 03/3/2020***: Added decoding of controller fault log messages (note `device_info` has been changed to `fault_log`)
+                        Added support for overriding sent message acknowledgements
+
 ---
 
 An evohome 'gateway' python script, for listening in on the radio communcation between Honeywell's evohome heating control devices, **and sending back** instructions to the Evohome Controller via the same radio mechanism. The hardware required for this script is is just (a) an arudino with a USB connector and (b) a CC1101 868Mhz radio receiver board (other hardware options also possible - see link in credits below).
@@ -75,6 +78,10 @@ Additionally, custom payloads can also be sent by adding to the `arguments` json
 Finally, when such command instructions are received correctly by the controller, the controller responds back almost immediately with a message to the gateway. This is shown in the received messages window. The gateway system can automatically resend commands in case it has not received (or recognised) the command acknowledgement from the controller in a reasonable time. Timeouts between retries and maximum number of retries can be specified in the config file using the parameters `COMMAND_RESEND_TIMEOUT_SECS` and 
 `COMMAND_RESEND_ATTEMPTS` respectively.
 
+A `COMMAND_RESEND_ATTEMPTS` value of 0 will disable waiting for acknowledgements on sent commands. Alternatively, individual send commands can be overriden by setting  `wait_for_ack` to `true` or `false` in the json command string, e.g:
+
+`{"command": "ping", "wait_for_ack" : true}`
+
 Note also that command send status, retries etc are posted to the MQTT broker, to a topic with the gateway's name.
 
 
@@ -128,7 +135,7 @@ The `DEVICES_FILE` is a *json* file containing a list of the devices on the evoh
         "13:133904": { "name" : "DHW", "zoneId" : 0, "zoneMaster" : true }
     }
 
-The deviceIDs are internal to each device. The first two digits determine the type of device (I think) and the remaining 6 digits are unique identifiers. As the listener script runs, if it finds a device with ID that has not been defined in the `DEVICES_FILE`, it will save it to a new file, as defined in the `NEW_DEVICES_FILE`. This can then be edited as required, and manually moved to replace the original `DEVICES_FILE`. 
+The deviceIDs are internal to each device. The first two digits determine the type of device and the remaining 6 digits are unique identifiers. As the listener script runs, if it finds a device with ID that has not been defined in the `DEVICES_FILE`, it will save it to a new file, as defined in the `NEW_DEVICES_FILE`. This can then be edited as required, and manually moved to replace the original `DEVICES_FILE`. 
 
 The `name` parameter can be anything. Note that the script will automatically prefix a device type 3 or 4 letter acronym to the name in the various log files showing the device type (e.g. `TRV Master Bedroom`). The `zoneId` is the zone number that evohome has assigned, and the `zoneMaster` flag is used to identify which of the devices is the master, for controlling overall zone temperature, in an multi-device zone (e.g. where there are more than one TRVs in a given zone). 
 

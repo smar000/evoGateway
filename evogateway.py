@@ -58,7 +58,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.10.0"
+VERSION         = "1.10.2"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -92,7 +92,7 @@ LOG_FILE          = getConfig(config,"Files", "LOG_FILE", "evogateway.log")
 DEVICES_FILE      = getConfig(config,"Files", "DEVICES_FILE", "devices.json")
 NEW_DEVICES_FILE  = getConfig(config,"Files", "NEW_DEVICES_FILE", "devices_new.json")
 
-LOG_DROPPED_PACKETS = getConfig(config,"Other", "LOG_DROPPED_PACKETS", False)
+LOG_DROPPED_PACKETS = getConfig(config,"Other", "LOG_DROPPED_PACKETS", "False").lower() == "true"
 
 MQTT_SERVER       = getConfig(config,"MQTT", "MQTT_SERVER", "")                  # Leave blank to disable MQTT publishing. Messages will still be saved in the various files
 MQTT_SUB_TOPIC    = getConfig(config,"MQTT", "MQTT_SUB_TOPIC", "")               # Note to exclude any trailing '/'
@@ -106,9 +106,9 @@ THIS_GATEWAY_ID   = getConfig(config,"SENDER", "THIS_GATEWAY_ID","30:999999")
 THIS_GATEWAY_NAME = getConfig(config,"SENDER", "THIS_GATEWAY_NAME","EvoGateway")
 THIS_GATEWAY_TYPE_ID = THIS_GATEWAY_ID.split(":")[0]
 
-COMMAND_RESEND_TIMEOUT_SECS = float(getConfig(config,"SENDER", "COMMAND_RESEND_TIMEOUT_SECS",60.0))
-COMMAND_RESEND_ATTEMPTS= int(getConfig(config,"SENDER", "COMMAND_RESEND_ATTEMPTS",3))
-AUTO_RESET_PORTS_ON_FAILURE = getConfig(config,"SENDER", "AUTO_RESET_PORTS_ON_FAILURE", False)
+COMMAND_RESEND_TIMEOUT_SECS = float(getConfig(config,"SENDER", "COMMAND_RESEND_TIMEOUT_SECS", 60.0))
+COMMAND_RESEND_ATTEMPTS= int(getConfig(config,"SENDER", "COMMAND_RESEND_ATTEMPTS", 3))    # A value of zero also disables waiting for sent command acknowledgements
+AUTO_RESET_PORTS_ON_FAILURE = getConfig(config,"SENDER", "AUTO_RESET_PORTS_ON_FAILURE", "False").lower() == "true"
 
 MAX_LOG_HISTORY   = getConfig(config,"SENDER", "MAX_LOG_HISTORY",3)
 
@@ -239,6 +239,7 @@ class Command():
     self.retry_dtm = None
     self.retries = 0
     self.send_failed = False
+    self.wait_for_ack = False
     self.send_acknowledged = False
     self.send_acknowledged_dtm = None
     self.dev1 = None
@@ -249,7 +250,10 @@ class Command():
 
 
   def payload_length(self):
-    return len(self.payload)/2
+    if self.payload:
+      return len(self.payload)/2
+    else:
+      return 0
 
 
 # --- General Functions
@@ -351,7 +355,12 @@ def parity(x):
 
 def convert_from_twos_comp(hex_val, divisor=100):
   """ Converts hex string of 2's complement """
-  return float(int(hex_val[0:2],16) << 8 | int(hex_val[2:4],16))/divisor
+  try:
+    val = float(int(hex_val[0:2],16) << 8 | int(hex_val[2:4],16))/divisor
+    return val
+  except Exception as e:
+    display_and_log("ERROR","Two's complement error {}. hex_val argument: {}".format(e, hex_val))
+
 
 # Init com ports
 def init_com_ports():
@@ -478,12 +487,14 @@ def mqtt_on_message(client, userdata, msg):
     if command_name or command_code:
         args = json_data["arguments"] if "arguments" in json_data else ""
         send_mode = json_data["send_mode"] if "send_mode" in json_data else None
-    new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))
+    
+    new_command = Command(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))    
+    new_command.wait_for_ack = json_data["wait_for_ack"] if "wait_for_ack" in json_data else COMMAND_RESEND_ATTEMPTS > 0
 
   send_queue.append(new_command)
 
 
-def mqtt_publish(device, command, msg, topic=None):
+def mqtt_publish(device, command, msg, topic=None, auto_ts=True):
   if not mqtt_client.is_connected:
     display_and_log(SYSTEM_MSG_TAG,"[WARN] MQTT publish failed as client is not connected to broker")
     return
@@ -493,12 +504,12 @@ def mqtt_publish(device, command, msg, topic=None):
         topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
       timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
       mqtt_client.publish(topic, msg, 0, True)
-      mqtt_client.publish("{}{}".format(topic,"_ts"), timestamp, 0, True)
+      if auto_ts:
+        mqtt_client.publish("{}{}".format(topic,"_ts"), timestamp, 0, True)
       # print("published to mqtt topic {}: {}".format(topic, msg))
   except Exception as e:
       print(str(e))
       pass
-
 
 
 def mqtt_init_homeassistant():
@@ -539,6 +550,7 @@ def mqtt_init_homeassistant():
     #     |- sent_command_ack_ts
     #     |- send_command_last_retry_ts
     pass
+
 
 def init_homie():
     # WIP....
@@ -595,6 +607,7 @@ def init_homie():
     msgs.append (("{}/$nodes".format(topic_base), ",".join(nodes_list), 0, True))
     msgs += node_msgs
     return msgs
+
 
 def get_homie_node_topics(node_topic, node_property):
     property_params = namedtuple("property_params", "property_name unit datatype format settable default")
@@ -1078,15 +1091,75 @@ def language(msg):
         print(traceback.format_exc())
 
 
-def device_info(msg):
-    if msg.payload_length == 3:
-        display_and_log(msg.command_name, "Device information requested: {}".format(msg.payload))
+def fault_log(msg):
+    """ Fault log entry from Controller for given log entry number (zero based) """    
+
+    if msg.payload_length == 3: # When requesting information, 3rd byte of payload is the fault message number (zero based) as shown on controller screen
+        display_and_log(msg.command_name, "Sytem fault log entry '{}' requested".format(msg.payload))
         return
     if msg.payload_length != 22:
         display_and_log(msg.command_name, "Invalid payload length of {} (should be mod 22). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
         return
-    display_data_row(msg, msg.rawmsg)
+
+    dtm_hex = int(msg.payload[20:22],16) << 32 | int(msg.payload[22:24],16) << 24 | int(msg.payload[24:26],16) << 16 | int(msg.payload[26:28],16) << 8
+    year = ((dtm_hex & int("1111111",2) << 24) >> 24) + 2000
+    month = (dtm_hex & int("1111",2) << 36) >> 36
+    day = (dtm_hex & int("11111",2) << 31) >> 31
+
+    hour = (dtm_hex & int("11111",2) << 19) >> 19
+    minute = (dtm_hex & int("111111",2) << 13) >> 13
+    second = (dtm_hex & int("111111",2) << 7) >> 7
+
+    dtm = datetime.datetime(year, month, day, hour, minute, second)
+
+    dev_id_int = int(msg.payload[38:40],16) << 16 | int(msg.payload[40:42],16) << 8 | int(msg.payload[42:44],16)
+    dev_id = "{:02}:{:06}".format((dev_id_int >> 18) & 0X3F, dev_id_int & 0x3FFFF)
+    if dev_id in devices:
+      device_name = devices[dev_id]["name"]
+    else:
+      device_name = dev_id
+
+    fault_type_id = int(msg.payload[2:4],16)
+    fault_code = int(msg.payload[8:10],16)
+
+    log_entry_number = int(msg.payload[4:6],16)
+    dev_num = int(msg.payload[10:12],16)
+    device_type_id = int(msg.payload[12:14],16)
     
+    if fault_type_id == 0x00 or fault_type_id == 0xc0:
+      fault_type = "Fault"
+    elif fault_type_id == 0x40:
+      fault_type = "Restore"
+    else:
+      fault_type = "Unknown info type '{}'".format(fault_type_id)
+      
+    if fault_code == 0x04:
+      fault = "Battery Low"
+    elif fault_code == 0x06:
+      fault = "Comms Fault"
+    elif fault_code == 0x0a:
+      fault = "Sensor Error"
+    else:
+      fault = "Unknown fault code '{}'".format(fault_code)
+
+    if device_type_id == 0x04: 
+      device_type = "TRV"
+    elif device_type_id == 0x01:
+      device_type = "SENSOR"
+    elif device_type_id == 0x05:
+      device_type =  "DHW"
+    elif device_type_id == 0x00:
+      device_type = "CONTROLLER"
+    else: 
+      device_type = "Unknown device type '{}'".format(device_type_id)
+
+    display_data_row(msg, "{}: {:%Y-%m-%d %H:%M:%S} [{} {}] {}: '{}' (Device ID: {})".format(
+      log_entry_number, dtm, device_type, device_name, fault_type, fault, dev_id))
+    
+    msg = {"device_type": device_type, "device_id": dev_id, "device_name" : device_name, "device_num" : dev_num, 
+      "fault_type": fault_type, "fault": fault, "event_ts": "{:%Y-%m-%dT%H:%M:%S}".format(dtm), "index": log_entry_number}
+    mqtt_publish("_faults", str(log_entry_number), json.dumps(msg))
+
 
 def battery_info(msg):
   if msg.payload_length != 3:
@@ -1289,6 +1362,11 @@ def process_send_command(command):
           if command.send_mode is None:
               command.send_mode = "RQ"
 
+      elif command.command_name and command.command_name in "fault_log":
+          # Default to getting last log entry           
+          command.payload = "000000"
+          command.send_mode = "RQ"
+
       elif (command.command_name and command.command_name == "controller_mode") or (command.command_code and command.command_code == "2E04"):
           # 0x2E04: Set controller mode
           mode = command.args["mode"]
@@ -1315,6 +1393,9 @@ def process_send_command(command):
             command.arg_desc = "['{}': {} degC until {}]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint, until)
           else:
             command.arg_desc = command.arg_desc = "['{}': {} deg C]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint)
+      else:
+        if not command.send_mode: # default to RQ
+          command.send_mode = "RQ"
   else:
       command.payload = command.args["payload"]
       if command.send_mode is None:
@@ -1323,15 +1404,17 @@ def process_send_command(command):
   command.dev1 = command.args["dev1"] if "dev1" in command.args else THIS_GATEWAY_ID
   command.dev2 = command.args["dev2"] if "dev2" in command.args else CONTROLLER_ID
   command.dev3 = command.args["dev3"] if "dev3" in command.args else EMPTY_DEVICE_ID
+
   command.destination = command.dev2
 
-  if command.payload_length() > -1 and command.payload:
-    sent_command = send_command_to_evohome(command)
-    return sent_command
 
-  else:
-      display_and_log("ERROR","Invalid command.payload = '{}' or command.payload length = {}".format(command.payload, command.payload_length()))
-      return None
+  # if command.payload_length() > -1 and command.payload:
+  sent_command = send_command_to_evohome(command)
+  return sent_command
+
+  # else:
+  #     display_and_log("ERROR","Invalid command.payload = '{}' or command.payload length = {}".format(command.payload, command.payload_length()))
+  #     return None
 
 
 def get_controller_mode_payload(mode_id, until_string=None):
@@ -1367,7 +1450,7 @@ def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
     if until_string:
         until = dtm_string_to_payload(until_string)
         mode = 4
-    elif setpoint >0:
+    elif setpoint > 0:
         mode = 2
         until = ""
     else:
@@ -1387,16 +1470,21 @@ def dtm_string_to_payload(dtm_string):
 
 
 def send_command_to_evohome(command):
-  if not command and not(command.command_code and command.payload):
-    display_and_log("ERROR","Send to evohome failed as invalid send_command: {}".format(command))
+  if not command and notcommand.command_code:
+    display_and_log("ERROR","Send to evohome failed as invalid 'command' argument: {}".format(command))
     return
 
+  if not command.payload:
+    command.payload = ""
+    
+  # Build outbound string for radio message  
   command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1,
     command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
   log_row = "{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string)
   log('{: <18} {}'.format("COMMAND_OUT", log_row))
   # display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
 
+  # Convert outbound string to bytearray and write via serial port
   byte_command = bytearray(b'{}\r\n'.format(command.send_string))
   response = serial_port.write(byte_command)
 
@@ -1459,7 +1547,7 @@ COMMANDS = {
   '0008': relay_heat_demand,
   '000A': zone_info,
   '0100': language,
-  '0418': device_info,
+  '0418': fault_log,
   '1060': battery_info,
   '10A0': dhw_settings,
   '10E0': heartbeat,
@@ -1491,7 +1579,7 @@ COMMAND_CODES = {
   "boiler_setpoint" : "22D9",
   "controller_mode" : "2E04",
   "date_request" : "313F",
-  "device_info" : "0418",
+  "fault_log" : "0418",
   "dhw_state" : "1F41",
   "dhw_temperature" : "1260",
   "external_sensor": "0002",
@@ -1589,17 +1677,18 @@ while ports_open:
       if serial_port.is_open:
 
         # Check if last command needs to be resent
-        if last_sent_command and not last_sent_command.send_failed and not last_sent_command.send_acknowledged:
+        if last_sent_command and last_sent_command.wait_for_ack and not last_sent_command.send_failed and not last_sent_command.send_acknowledged:
           check_previous_command_sent(last_sent_command)
 
         # Process any unsent commands waiting to be sent only if we don't have any pending last_sent_command
         if send_queue and "is_send_port" in port["parameters"] and port["parameters"]["is_send_port"]:
-          if not last_sent_command or last_sent_command.send_acknowledged or last_sent_command.send_failed:
+          if not last_sent_command or not last_sent_command.wait_for_ack or last_sent_command.send_acknowledged or last_sent_command.send_failed:
             new_command = send_queue.pop()
             last_sent_command = process_send_command(new_command)
             if send_queue and len(send_queue) != send_queue_size_displayed:
               display_and_log("DEBUG","{} command(s) queued for sending to controller".format(len(send_queue)))
           elif len(send_queue) != send_queue_size_displayed:
+            print("last_send_command: wait for ack: {}".format(last_sent_command.wait_for_ack))
             display_and_log("DEBUG","{} command(s) queued and held, pending acknowledgement of '{}' command previously sent".format(len(send_queue), last_sent_command.command_name))
           send_queue_size_displayed = len(send_queue)
 
