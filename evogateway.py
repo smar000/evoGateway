@@ -58,7 +58,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "1.10.2"
+VERSION         = "1.11.0"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -93,6 +93,7 @@ DEVICES_FILE      = getConfig(config,"Files", "DEVICES_FILE", "devices.json")
 NEW_DEVICES_FILE  = getConfig(config,"Files", "NEW_DEVICES_FILE", "devices_new.json")
 
 LOG_DROPPED_PACKETS = getConfig(config,"Other", "LOG_DROPPED_PACKETS", "False").lower() == "true"
+DROP_DUPLICATE_MESSAGES = getConfig(config,"Other", "DROP_DUPLICATE_MESSAGES", "True").lower() == "true"
 
 MQTT_SERVER       = getConfig(config,"MQTT", "MQTT_SERVER", "")                  # Leave blank to disable MQTT publishing. Messages will still be saved in the various files
 MQTT_SUB_TOPIC    = getConfig(config,"MQTT", "MQTT_SUB_TOPIC", "")               # Note to exclude any trailing '/'
@@ -155,19 +156,23 @@ CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "D
 # --- Classes
 class Message():
   ''' Object to hold details of interpreted (received) message. '''
-  def __init__(self,rawmsg):
-    self.rawmsg       = rawmsg.strip()
-    self.source_id    = rawmsg[11:20]
+  def __init__(self, rawmsg, has_rssi = False ):    
+    offset = 4 if has_rssi else 0                           # new ghoti57 fifo_hang branch has rssi
 
-    self.msg_type     = rawmsg[4:6].strip()
-    self.source       = rawmsg[11:20]               # device 1 - This looks as if this is always the source; Note this is overwritten with name of device
-    self.source_type  = rawmsg[11:13]               # the first 2 digits seem to be identifier for type of device
+    self.rawmsg       = rawmsg.strip()
+    
+    self.rssi         = rawmsg[4:7]  if has_rssi else None    
+
+    self.source_id    = rawmsg[11 + offset: 20 + offset]
+    self.msg_type     = rawmsg[ 4 + offset:  6 + offset].strip()
+    self.source       = rawmsg[11 + offset: 20 + offset]               # device 1 - This looks as if this is always the source; Note this is overwritten with name of +device
+    self.source_type  = rawmsg[11 + offset: 13 + offset]               # the first 2 digits seem to be identifier for type of +device
     self.source_name  = self.source
-    self.device2      = rawmsg[21:30]               # device 2 - Requests (RQ), Responses (RP) and Write (W) seem to be sent to device 2 only
-    self.device2_type = rawmsg[21:23]               # device 2 type
+    self.device2      = rawmsg[21 + offset: 30 + offset]               # device 2 - Requests (RQ), Responses (RP) and Write (W) seem to be sent to device 2 +only
+    self.device2_type = rawmsg[21 + offset: 23 + offset]               # device 2 +type
     self.device2_name = self.device2
-    self.device3      = rawmsg[31:40]               # device 3 - Information (I) is to device 3. Broadcast messages have device 1 and 3 are the same
-    self.device3_type = rawmsg[31:33]               # device 3 type
+    self.device3      = rawmsg[31 + offset: 40 + offset]               # device 3 - Information (I) is to device 3. Broadcast messages have device 1 and 3 are the +same
+    self.device3_type = rawmsg[31 + offset: 33 + offset]               # device 3 +type
     self.device3_name = self.device3
 
 
@@ -189,15 +194,15 @@ class Message():
 
     self._initialise_device_names()
 
-    self.command_code = rawmsg[41:45].upper()       # command code hex
+    self.command_code = rawmsg[41 + offset: 45 + offset].upper()       # command code +hex
     self.command_name = self.command_code           # needs to be assigned outside, as we are doing all the processing outside of this class/struct
     try:
-        self.payload_length = int(rawmsg[46:49])          # Note this is not HEX...
+        self.payload_length = int(rawmsg[46 + offset: 49 + offset])          # Note this is not +HEX...
     except Exception as e:
-        print ("Error instantiating Message class on line '{}': {}. Raw msg: '{}'. length = {}".format(sys.exc_info()[-1].tb_lineno, str(e), rawmsg, len(rawmsg)))
+        print ("Error instantiating Message class on line '{}':  {}. Raw msg: '{}'. length = {}".format(sys.exc_info()[-1].tb_lineno, str(e), rawmsg, +len(rawmsg)))
         self.payload_length = 0
 
-    self.payload      = rawmsg[50:]
+    self.payload      = rawmsg[50 + offset:]
     self.port         = None
     self.failed_decrypt= "_ENC" in rawmsg or "_BAD" in rawmsg or "BAD_" in rawmsg or "ERR" in rawmsg
 
@@ -223,6 +228,17 @@ class Message():
 
   def is_broadcast(self):
     return self.source == self.destination
+
+
+  def get_raw_msg_with_ts(self, strip_rssi=True):    
+    if self.rssi: # remove the rssi before saving to stack - different controllers may receive the same message but with different signal strengths
+      raw = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), "--- {}".format(self.rawmsg[8:]))
+    else:
+      raw = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), self.rawmsg)    
+    return raw
+
+
+
 
 class Command():
   ''' Object to hold details of command sent to evohome controller.'''
@@ -309,21 +325,22 @@ def display_data_row(msg, display_text, ref_zone=-1, suffix_text=""):
   destination = "BROADCAST MESSAGE" if msg.is_broadcast() else msg.destination_name
   if ref_zone > -1:
     zone_name = "@ {:<20}".format(zones[ref_zone]) if ref_zone in zones else "                      "
-    display_row = "{:<2}| {:<22} -> {:<22} | {:>5} {} [Zone {:<3}] {}".format(
+    display_row = "{:<2}| {:<22} -> {:<22} | {:>5} {:<25} [Zone {:<3}] {}".format(
         msg.msg_type, msg.source_name, destination, display_text, zone_name, ref_zone, suffix_text)
   else:
     display_row = "{:<2}| {:<22} -> {:<22} | {:>5} {}".format(msg.msg_type, msg.source_name, destination, display_text, suffix_text)
-  display_and_log(msg.command_name, display_row, msg.port)
+  display_and_log(msg.command_name, display_row, msg.port, msg.rssi)
 
 
-def display_and_log(source="-", display_message="", port_tag=" "):
+def display_and_log(source="-", display_message="", port_tag=None, rssi=None):
   try:
     global eventfile
     if os.path.getsize(EVENTS_FILE) > 5000000:
         eventfile.close()
         rotate_files(EVENTS_FILE)
         eventfile = open(EVENTS_FILE,"a")
-    row = "{} |{:>1}| {:<20}| {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_tag, source, display_message)
+    port_rssi = "{}/{:3s}".format(port_tag, rssi if rssi else " - ") if port_tag else ""
+    row = "{} |{:<5}| {:<20}| {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), port_rssi, source, display_message)
     row = "{:<140}".format(row)
     print (row)
     # print   (datetime.datetime.now().strftime("%Y-%m-%d %X") + ": " + "{:<20}".format(str(source)) + ": " + str(display_message))
@@ -331,7 +348,7 @@ def display_and_log(source="-", display_message="", port_tag=" "):
     file.flush(eventfile)
   except Exception as e:
     print (str(e))
-    pass
+
 
 
 def log(logentry, port_tag="-"):
@@ -389,6 +406,7 @@ def init_com_ports():
               display_and_log("COM_PORT ERROR","Error connecting to COM port {}. Giving up...".format(params["com_port"]))
 
       if serial_port is not None:
+        serial_port.tag = count
         serial_ports[port] = {"connection": serial_port, "parameters" : params, "tag": count}
         display_and_log(SYSTEM_MSG_TAG,"{}: Connected to serial port {}".format(serial_ports[port]["tag"], port))
         count +=1
@@ -410,20 +428,29 @@ def reset_com_ports():
 # --- MQTT Functions -
 def initialise_mqtt_client(mqtt_client):
   ''' Initalise the mqtt client object '''
+  if not MQTT_SERVER:
+    display_and_log (SYSTEM_MSG_TAG,"No MQTT broker specified. MQTT will be ignored")
+    return
+
   if MQTT_USER:
     mqtt_client.username_pw_set(MQTT_USER, MQTT_PW)
-  mqtt_client.on_connect = mqtt_on_connect
-  mqtt_client.on_message = mqtt_on_message
-  mqtt_client.on_log = mqtt_on_log
-  mqtt_client.on_disconnect = mqtt_on_disconnect
-  mqtt_client.is_connected = False # Custom attribute so that we can track connection status
+  try:
+    mqtt_client.on_connect = mqtt_on_connect
+    mqtt_client.on_message = mqtt_on_message
+    mqtt_client.on_log = mqtt_on_log
+    mqtt_client.on_disconnect = mqtt_on_disconnect
+    mqtt_client.is_connected = False # Custom attribute so that we can track connection status
 
-  display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt server %s" % MQTT_SERVER)
-  mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=60, bind_address="")
+    display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt broker '%s'" % MQTT_SERVER)
+    mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=60, bind_address="")
 
-  display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
-  mqtt_client.subscribe(MQTT_SUB_TOPIC)
-  mqtt_client.loop_start()
+    display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
+    mqtt_client.subscribe(MQTT_SUB_TOPIC)
+    mqtt_client.loop_start()
+  except Exception as e:
+    display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
+    print(traceback.format_exc())
+    return None
 
 
 def mqtt_on_connect(client, userdata, flags, rc):
@@ -495,6 +522,9 @@ def mqtt_on_message(client, userdata, msg):
 
 
 def mqtt_publish(device, command, msg, topic=None, auto_ts=True):
+  if not mqtt_client:
+    return
+
   if not mqtt_client.is_connected:
     display_and_log(SYSTEM_MSG_TAG,"[WARN] MQTT publish failed as client is not connected to broker")
     return
@@ -639,47 +669,59 @@ def get_homie_node_topics(node_topic, node_property):
     msgs.append (("{}/$settable".format(topic_base), params.settable, 0, True))
     return msgs
 
+
 # --- evohome received message command processing functions
-def process_received_message(data, port_tag=None):
-  ''' Process the raw message received. Also check if it is a reponse to previous sent command '''
-  if not ("_ENC" in data or "_BAD" in data or "BAD_" in data or "ERR" in data) and len(data) > 40:          #Make sure no obvious errors in getting the data....
+def get_message_from_data(data, port_tag=None):
+  ''' Convert the received raw data into a Message object  '''
+  if not ("Invalid Manchester" in data or "Truncated" in data or "_ENC" in data or "_BAD" in data or "BAD_" in data or "ERR" in data) and len(data) > 40:          #Make sure no obvious errors in getting the data....
     if not data.startswith("---"):
-        # Echos of commands sent by us come back without the --- prefix. Noticed on the fifo firmware that sometimes the request type prefix seems to be messed up. Workaround for this...
+        # Some echos of commands sent by us seem to come back without the --- prefix. Noticed on the fifo firmware that sometimes the request type prefix seems to be messed up. Workaround for this...
         if data.strip().startswith("W---"):
             data = data[1:]
         else:
             data = "---  {}".format(data) if len(data.split(" ",1)[0]) <2 else "--- {}".format(data)
 
-    if data_pattern.match(data):
-        msg = Message(data)
+    old_fw = data_pattern.match(data) # older firmware did not include rssi in data
+    newer_fw = data_pattern_with_rssi.match(data) # newer fw (including evofw3) has rssi
+    
+    if old_fw or newer_fw:
+        msg = Message(data, newer_fw)
         msg.port = port_tag
-        # Check if device is known...
-        if not msg.source in devices:
-            display_and_log("NEW DEVICE FOUND", msg.source)
-            devices.update({msg.source : {"name" : msg.source, "zone_id" : -1, "zoneMaster" : False  }})
-            with open(NEW_DEVICES_FILE,'w') as fp:
-                fp.write(json.dumps(devices, sort_keys=True, indent=4))
-            fp.close()
+        return msg
+    elif not re.search("^--- ([a-z0-9][a-z0-9]\.)*", data): # Pattern for some sort of debug msg from the new evofw3. If so, ignore these...
+        display_and_log("ERROR","Pattern match failed on received data: '{}'".format(data), port_tag)
+    
+  return None
 
-        if msg.command_code in COMMANDS:
-            try:
-                msg.command_name = COMMANDS[msg.command_code].__name__.upper() # Get the name of the command from our list of commands
-                COMMANDS[msg.command_code](msg)
-                log('{: <18} {}'.format(msg.command_name, data), port_tag)
-            except Exception as e:
-                display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
-                print(traceback.format_exc())
-            return msg
-        else:
-            msg.command_name = "UNKNOWN COMMAND"
-            display_data_row(msg, "Command code: {}, Payload: {}".format(msg.command_code, msg.payload))
-            # display_and_log("UNKNOWN COMMAND","Command code: {}, Payload: {}".format(msg.command_code, msg.payload), port_tag)
-            # log("UNKNOWN COMMAND: {}".format(data), port_tag)
-    else:
-        display_and_log("ERROR","Pattern match failed on received data: '{}' (port: {})".format(data, port_tag))
-        return None
-  else:
+
+def process_received_message(msg):
+  ''' Process the Message object '''
+  if not msg:
+    display_and_log ("ERROR", "Cannot process message as Message object is None")
     return None
+
+  # Check if device is known...
+  if not msg.source in devices:
+      display_and_log("NEW DEVICE FOUND", msg.source)
+      devices.update({msg.source : {"name" : msg.source, "zone_id" : -1, "zoneMaster" : False  }})
+      with open(NEW_DEVICES_FILE,'w') as fp:
+          fp.write(json.dumps(devices, sort_keys=True, indent=4))
+      fp.close()
+
+  if msg.command_code in COMMANDS:
+      try:
+        msg.command_name = COMMANDS[msg.command_code].__name__.upper() # Get the name of the command from our list of commands
+        COMMANDS[msg.command_code](msg)
+        log('{: <18} {}'.format(msg.command_name, msg.rawmsg), msg.port)
+      except Exception as e:
+          display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, msg.rawmsg, msg.port))
+          print(traceback.format_exc())
+          return None
+      return msg
+  else:
+      msg.command_name = "UNKNOWN COMMAND"
+      display_data_row(msg, "Command code: {}, Payload: {}".format(msg.command_code, msg.payload))
+      return None
 
 
 def get_zone_details(payload, source_type=None):
@@ -711,8 +753,7 @@ def get_zone_details(payload, source_type=None):
 
 def bind(msg):
   display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
-  pass
-
+  
 
 def sync(msg):
   # https://www.domoticaforum.eu/viewtopic.php?f=7&t=5806&start=120#p73918
@@ -728,19 +769,18 @@ def sync(msg):
     display_data_row(msg, "Next sync at {} (in {} secs)".format(timeout_time, timeout))
   else:
     display_data_row(msg, "Payload: {}".format(msg.payload))
-  pass
+  
 
 
 def schedule_sync(msg):
-  display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
-  pass
+  display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))  
   # The 0x0006 command is a schedule sync message sent between the gateway to controller to check whether there have been any changes since the last exchange of schedule information
   # https://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80/page13
 
 
 def zone_name(msg):
   display_data_row(msg, "Payload: {}".format(msg.payload), -1, "Payload length: {}".format(msg.payload_length))
-  pass
+  
 
 
 def setpoint_ufh(msg):
@@ -1180,7 +1220,7 @@ def battery_info(msg):
     else:
         warning = ""
 
-    display_data_row(msg, "{:.1f}% (device ID {})".format(battery, device_id), zone_id, warning)
+    display_data_row(msg, "{:.1f}%".format(battery), zone_id, warning,  "(device ID {})".format(device_id))
     topic = "dhw" if zone_id == 250 else zones[zone_id]
     mqtt_publish("{}/{}".format(topic, msg.source_name),"battery",battery)
 
@@ -1481,7 +1521,7 @@ def send_command_to_evohome(command):
   command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1,
     command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
   log_row = "{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string)
-  log('{: <18} {}'.format("COMMAND_OUT", log_row))
+  log('{: <18} {}'.format("COMMAND_OUT", log_row), command.serial_port.tag)
   # display_and_log("COMMAND_OUT","{}: Sending '{}'".format(command.command_name.upper() if command.command_name is not None else "-None-", command.send_string))
 
   # Convert outbound string to bytearray and write via serial port
@@ -1489,9 +1529,9 @@ def send_command_to_evohome(command):
   response = serial_port.write(byte_command)
 
   display_and_log("COMMAND_OUT","{} {} Command SENT".format(command.command_name.upper() if command.command_name is not None else command.command_code,
-    command.arg_desc if command.arg_desc !="[]" else ":"))
+    command.arg_desc if command.arg_desc !="[]" else ":"), command.serial_port.tag)
 
-  if mqtt_client.is_connected:
+  if mqtt_client and mqtt_client.is_connected:
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
     mqtt_client.publish("{}/command".format(SENT_COMMAND_TOPIC), "{} {}".format(command.command_name, command.args), 0, True)
     mqtt_client.publish("{}/evo_msg".format(SENT_COMMAND_TOPIC), command.send_string, 0, True)
@@ -1520,23 +1560,25 @@ def check_previous_command_sent(previous_command):
   ''' Resend previous command if ack not received in reasonable time '''
   if not previous_command or previous_command.send_acknowledged:
     return
-  if previous_command.retries < COMMAND_RESEND_ATTEMPTS + 1:
+  if previous_command.retries <= COMMAND_RESEND_ATTEMPTS and not previous_command.send_failed:
     seconds_since_sent = (datetime.datetime.now() - previous_command.retry_dtm).total_seconds()
 
     if seconds_since_sent > COMMAND_RESEND_TIMEOUT_SECS:
+      if previous_command.retries == COMMAND_RESEND_ATTEMPTS and AUTO_RESET_PORTS_ON_FAILURE:
+        reset_com_ports() # Reset serial ports before last attempt
+
       display_and_log("COMMAND_OUT","{} {} Command NOT acknowledged. Resending attempt {} of {}...".format(
         previous_command.command_name.upper() if previous_command.command_name else previous_command.command_code, 
         previous_command.arg_desc if previous_command.arg_desc != "[]" else ":", previous_command.retries, COMMAND_RESEND_ATTEMPTS))
       previous_command = send_command_to_evohome(previous_command)
-  else:
-    if not previous_command.send_failed:
+  elif not previous_command.send_failed:
       previous_command.send_failed = True
       mqtt_publish("","command_sent_failed",True,SENT_COMMAND_TOPIC)
       display_and_log("COMMAND","ERROR: Previously sent command '{}' failed to send. No ack received from controller".format(previous_command.command_name))
 
-      if AUTO_RESET_PORTS_ON_FAILURE:
-        # command_code, command_name, args, send_mode = get_reset_serialports_command()
-        send_queue.append(get_reset_serialports_command())
+      # if AUTO_RESET_PORTS_ON_FAILURE:
+      #   # command_code, command_name, args, send_mode = get_reset_serialports_command()
+      #   send_queue.append(get_reset_serialports_command())
 
 
 # --- evohome Commands Dict
@@ -1618,13 +1660,10 @@ signal.signal(signal.SIGINT, sig_handler)    # Trap CTL-C etc
 # display_and_log("","\n")
 display_and_log("","evohome Listener/Sender Gateway version " + VERSION )
 
-serial_ports = init_com_ports() # global var serial_ports also changed in fn reset_com_ports
+serial_ports = init_com_ports() # global var serial_ports also changed in reset_com_ports()
 if len(serial_ports) == 0:
   print("Serial port(s) parameters not found. Exiting...")
   sys.exit()
-
-# for port_id, port in serial_ports.items():
-#   display_and_log("","{}: Connected to COM port {}".format(port["tag"], port_id))
 
 logfile.write("")
 logfile.write("-----------------------------------------------------------\n")
@@ -1660,11 +1699,16 @@ display_and_log('','Listening...')
 file.flush(logfile)
 
 # init MQTT
-mqtt_client = mqtt.Client()
-initialise_mqtt_client(mqtt_client)
+if MQTT_SERVER:
+  mqtt_client = mqtt.Client()
+  initialise_mqtt_client(mqtt_client)
+else:
+  mqtt_client = None
 
 prev_data_had_errors = False
-data_pattern = re.compile("^--- ( I| W|RQ|RP) --- (--:------|\d{2}:\d{6}) (--:------ |\d{2}:\d{6} ){2}[0-9a-fA-F]{4} \d{3}")
+data_pattern = re.compile("^--- ( I| W|RQ|RP) --- (--:------ |\d{2}:\d{6} ){3}[0-9a-fA-F]{4} \d{3}")
+data_pattern_with_rssi = re.compile("^--- \d{3} ( I| W|RQ|RP) --- (--:------ |\d{2}:\d{6} ){3}[0-9a-fA-F]{4} \d{3}")
+
 data_row_stack = deque()
 last_sent_command = None
 ports_open = any(port["connection"].is_open for port_id, port in serial_ports.items()) # ports_open var also updated in fn close_com_ports
@@ -1684,6 +1728,7 @@ while ports_open:
         if send_queue and "is_send_port" in port["parameters"] and port["parameters"]["is_send_port"]:
           if not last_sent_command or not last_sent_command.wait_for_ack or last_sent_command.send_acknowledged or last_sent_command.send_failed:
             new_command = send_queue.pop()
+            new_command.serial_port = serial_port
             last_sent_command = process_send_command(new_command)
             if send_queue and len(send_queue) != send_queue_size_displayed:
               display_and_log("DEBUG","{} command(s) queued for sending to controller".format(len(send_queue)))
@@ -1696,10 +1741,11 @@ while ports_open:
         if serial_port.inWaiting() > 0:
           data_row = serial_port.readline().strip()
           if data_row:
-            stack_entry = "{}: {}".format(datetime.datetime.now().strftime("%Y-%m-%d %X"), data_row)
+            msg = get_message_from_data(data_row, serial_port.tag)
+            stack_entry = msg.get_raw_msg_with_ts() if msg else None                        
             # Make sure it is not a duplicate message (e.g. received through additional listener/gateway devices)
-            if stack_entry not in data_row_stack:
-              msg = process_received_message(data_row, port["tag"])
+            if not DROP_DUPLICATE_MESSAGES or (stack_entry and stack_entry not in data_row_stack): 
+              msg = process_received_message(msg)
               if msg:
                 # Check if the received message is acknowledgement of previously sent command
                 if last_sent_command and msg.source == last_sent_command.destination and msg.destination == THIS_GATEWAY_ID:
@@ -1708,13 +1754,13 @@ while ports_open:
                   last_sent_command.send_acknowledged = True
                   last_sent_command.send_acknowledged_dtm = datetime.datetime.now()
                   display_and_log("COMMAND_OUT","{} {} Command ACKNOWLEDGED".format(last_sent_command.command_name.upper(),
-                    last_sent_command.arg_desc if last_sent_command.arg_desc != "[]" else ":"))
+                    last_sent_command.arg_desc if last_sent_command.arg_desc != "[]" else ":"), serial_port.tag)
                 prev_data_had_errors = False
               else:
                   if not prev_data_had_errors and LOG_DROPPED_PACKETS:
                       prev_data_had_errors = True
-                      display_and_log("ERROR","--- Message dropped: packet error from hardware/firmware", port["tag"])
-                  log("{: <18} {}".format("", data_row), port["tag"])
+                      display_and_log("ERROR","--- Message dropped: packet error from hardware/firmware", serial_port.tag)
+                  log("{: <18} {}".format("", data_row), serial_port.tag)
               file.flush(logfile)
               data_row_stack.append(stack_entry)
               if len(data_row_stack) > MAX_HISTORY_STACK_LENGTH:
@@ -1732,5 +1778,6 @@ while ports_open:
 
     # comConnected = False
 
-mqtt_client.loop_stop()
+if mqtt_client:
+  mqtt_client.loop_stop()
 print("Session ended\n")

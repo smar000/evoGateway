@@ -14,6 +14,8 @@
 ***Update 03/3/2020***: Added decoding of controller fault log messages (note `device_info` has been changed to `fault_log`)
                         Added support for overriding sent message acknowledgements
 
+***Update 06/4/2020***: Added support for newer firmwares, such as evofw3, which include RSSI
+
 ---
 
 An evohome 'gateway' python script, for listening in on the radio communcation between Honeywell's evohome heating control devices, **and sending back** instructions to the Evohome Controller via the same radio mechanism. The hardware required for this script is is just (a) an arudino with a USB connector and (b) a CC1101 868Mhz radio receiver board (other hardware options also possible - see link in credits below).
