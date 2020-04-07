@@ -1216,13 +1216,13 @@ def battery_info(msg):
         battery = battery / 2  #recode battery level values to 0-100 from original 0-200 values
 
     if(lowBattery != 0):    #TODO... Need to check this to understand how it is used.
-        warning = " - LOW BATTERY WARNING"
+        suffix = "- LOW BATTERY WARNING (device ID {})".format(device_id)
     else:
-        warning = ""
+        suffix = "(device ID {})".format(device_id)
 
-    display_data_row(msg, "{:.1f}%".format(battery), zone_id, warning,  "(device ID {})".format(device_id))
+    display_data_row(msg, "{:.1f}%".format(battery), zone_id, suffix)
     topic = "dhw" if zone_id == 250 else zones[zone_id]
-    mqtt_publish("{}/{}".format(topic, msg.source_name),"battery",battery)
+    mqtt_publish("{}/{}".format(topic, msg.source_name), "battery", battery)
 
 
 def opentherm_msg(msg):
