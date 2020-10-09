@@ -1,4 +1,5 @@
 [Serial Port]
+#COM_PORTS = {"/dev/evoftdi": {"baud" : 76800, "retry_limit": 10, "is_send_port": true}, "/dev/evoqinheng": {"baud" : 115200, "retry_limit": 10, "is_send_port": false}}
 COM_PORT         = /dev/evogateway
 COM_BAUD         = 115200
 COM_RETRY_LIMIT  = 10
@@ -18,12 +19,17 @@ MQTT_PW          = xxxx
 MQTT_CLIENTID    = evoGateway
 
 [SENDER]
-# Only tested with gateway_id's with device type 30:071715. Device ID seems to matter. Tried 30:99999 and had incorrect reply address etc.
-THIS_GATEWAY_ID     = 30:071715
-THIS_GATEWAY_NAME   = EvoGateway
-COMMAND_RESEND_TIMEOUT_SECS = 30
-COMMAND_RESEND_ATTEMPTS= 5
+# Apparently the ID 18:056026 is hardcoded into the evofw3. Previous evofw2 fifo branch had 19:056026 ???
+THIS_GATEWAY_ID             = 18:056026
+THIS_GATEWAY_NAME           = EvoGateway
 
+# Try to match an acknowledgement from Controller for outbound commands (unless overridden via individual command json with 'wait_for_ack') 
+COMMAND_RESEND_TIMEOUT_SECS = 10
+COMMAND_RESEND_ATTEMPTS= 3
+AUTO_RESET_PORTS_ON_FAILURE = True
 
 [MISC]
-LOG_DROPPED_PACKETS = False
+DROP_DUPLICATE_MESSAGES     = True
+LOG_DROPPED_PACKETS         = True
+MAX_LOG_HISTORY             = 10
+

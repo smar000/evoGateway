@@ -16,6 +16,7 @@
 
 ***Update 06/4/2020***: Added support for newer firmwares, such as evofw3, which include RSSI
 
+***Update 09/6/2020***: BREAKING CHANGE - Migrated to python 3 (as python 2 is EOL)
 ---
 
 An evohome 'gateway' python script, for listening in on the radio communcation between Honeywell's evohome heating control devices, **and sending back** instructions to the Evohome Controller via the same radio mechanism. The hardware required for this script is is just (a) an arudino with a USB connector and (b) a CC1101 868Mhz radio receiver board (other hardware options also possible - see link in credits below).
@@ -88,7 +89,7 @@ Note also that command send status, retries etc are posted to the MQTT broker, t
 
 
 ### Requirements
-This script has only been tested on Ubuntu 16.04 server, running python 2.7.12. It requires the following python modules:
+This script has only been tested on Ubuntu 20.04 server, running python 3.6.8. It requires the following python modules:
 
 1. pyserial - this can be installed with `python -m pip install pyserial`
 2. paho mqtt - installed by `pip install paho-mqtt`
