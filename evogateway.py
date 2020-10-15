@@ -624,7 +624,7 @@ def init_homie():
         device_type = device_id.split(":")[0]
         device_name = to_snake(device["name"]).lower().replace("_","-")
 
-        zone_id = device["zoneId"]
+        zone_id = device["zone_id"]
         zone_name = zones[zone_id]         # if 1 <= zone_id <= 12 else str(zone_id)
 
         node_name = "{}-{}-{}".format(DEVICE_TYPE[device_type].lower(), device_name, device_id.replace(":","-"))
@@ -805,7 +805,7 @@ def setpoint_ufh(msg):
     # zone_name =""
     for d in devices:
         if devices[d].get('ufh_zoneId') and zone_id == devices[d]['ufh_zoneId']:
-            zone_id = devices[d]["zoneId"]
+            zone_id = devices[d]["zone_id"]
             zone_name = devices[d]["name"]
             break
     if zone_name == "":
@@ -872,7 +872,7 @@ def zone_temperature(msg):
   temperature = float(int(msg.payload[2:6],16))/100
   zone_id=0
   if devices.get(msg.source_id):
-    zone_id = devices[msg.source_id]["zoneId"]
+    zone_id = devices[msg.source_id].get("zone_id", 0)
   else:
     display_and_log("DEBUG","Device not found for source " + msg.source_id)
   if zone_id >0:
@@ -880,7 +880,7 @@ def zone_temperature(msg):
   else:
     zoneDesc = ""
   display_data_row(msg, "{:5.2f}°C".format(temperature), zone_id)
-  mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name), "temperature",temperature)
+  mqtt_publish("{}/{}".format(zones.get(zone_id), msg.source_name), "temperature",temperature)
 
 
 def window_status(msg):
@@ -904,7 +904,7 @@ def window_status(msg):
   else:
         miscDesc = ""
   display_data_row(msg, "{:>7}".format(status), zone_id)
-  mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name),"window_status",status)
+  mqtt_publish("{}/{}".format(zones.get(zone_id), msg.source_name),"window_status",status)
 
 
 def other_command(msg):
@@ -960,7 +960,7 @@ def zone_heat_demand(msg):
                 for d in devices:
                     if 'ufh_zoneId' in devices[d] and devices[d]['ufh_zoneId'] == ufh_zone_id:
                         # display_and_log("DEBUG","UFH Zone matched to " + devices[d]["name"])
-                        zone_id = devices[d]["zoneId"] #
+                        zone_id = devices[d]["zone_id"] #
                         zone_name = devices[d]["name"]
                         zone_name_parts = zone_name.split(' ', 1)
                         device_type = "UFH {}".format(zone_name_parts[1]) if len(zone_name_parts) > 1 else "UFH {}".format(zone_name)
@@ -1210,7 +1210,7 @@ def fault_log(msg):
     elif device_type_id == 0x05:
       device_type =  "DHW"
     elif device_type_id == 0x00:
-      device_type = "CONTROLLER"
+      device_type = "RELAY"
     else: 
       device_type = "Unknown device type '{}'".format(device_type_id)
 
@@ -1229,7 +1229,7 @@ def battery_info(msg):
     device_id = int(msg.payload[0:2],16)
     battery = int(msg.payload[2:4],16)
     lowBattery = int(msg.payload[4:5],16)
-    zone_id = devices[msg.source]["zoneId"]
+    zone_id = devices[msg.source]["zone_id"]
 
     if battery == 0xFF:
         battery = 100 # recode full battery (0xFF) to 100 for consistency across device types
@@ -1257,7 +1257,7 @@ def opentherm_msg(msg):
   msg_type = OPENTHERM_MSG_TYPES[msg_type_id] if OPENTHERM_MSG_TYPES[msg_type_id] else msg_type_id
   data_id = int(msg.payload[4:6], 16)                       # OT command ID
   data_value = msg.payload[6:10]                            # Command response value
-  zone_id = devices[msg.source]["zoneId"]
+  zone_id = devices[msg.source].get("zoneid", 0)
 
   if not int(msg.payload[2:4], 16) // 0x80 == parity(int(msg.payload[2:], 16) & 0x7FFFFFFF):      
     display_data_row(msg, "Parity error. Msg type_id: {} ({}) id: {}, value: {}".format(msg_type_id, msg_type, data_id, data_value))
@@ -1702,7 +1702,7 @@ if os.path.isfile(DEVICES_FILE):
 else:
   devices = {}
 # Add this server/gateway as a device, but using dummy zone ID for now
-devices[THIS_GATEWAY_ID] = { "name" : THIS_GATEWAY_NAME, "zoneId": 240, "zoneMaster": True }
+devices[THIS_GATEWAY_ID] = { "name" : THIS_GATEWAY_NAME, "zone_id": 240, "zoneMaster": True }
 
 zones = {}                            # Create a seperate collection of Zones, so that we can look up zone names quickly
 send_queue = []
@@ -1710,7 +1710,7 @@ send_queue_size_displayed = 0         # Used to track if we've shown the queue s
 
 for d in devices:
   if devices[d]['zoneMaster']:
-    zones[devices[d]["zoneId"]] = devices[d]["name"]
+    zones[devices[d]["zone_id"]] = devices[d]["name"]
   # generate the mqtt topic for the device (using Homie convention)
 
 display_and_log('','')
@@ -1718,7 +1718,7 @@ display_and_log('','-----------------------------------------------------------'
 display_and_log('',"Devices loaded from '" + DEVICES_FILE + "' file:")
 for key in sorted(devices):
   zm = " [Master]" if devices[key]['zoneMaster'] else ""
-  display_and_log('','   ' + key + " - " + '{0: <22}'.format(devices[key]['name']) + " - Zone " + '{0: <3}'.format(devices[key]["zoneId"]) + zm )
+  display_and_log('','   ' + key + " - " + '{0: <22}'.format(devices[key]['name']) + " - Zone " + '{0: <3}'.format(devices[key]["zone_id"]) + zm )
 
 display_and_log('','-----------------------------------------------------------')
 display_and_log('','')
