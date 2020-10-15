@@ -446,9 +446,6 @@ def initialise_mqtt_client(mqtt_client):
 
     display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt broker '%s'" % MQTT_SERVER)
     mqtt_client.connect(MQTT_SERVER, port=1883, keepalive=60, bind_address="")
-
-    display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
-    mqtt_client.subscribe(MQTT_SUB_TOPIC)
     mqtt_client.loop_start()
   except Exception as e:
     display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
@@ -461,6 +458,13 @@ def mqtt_on_connect(client, userdata, flags, rc):
   if rc == 0:
       client.is_connected = True #set flag
       display_and_log (SYSTEM_MSG_TAG,"MQTT connection established with broker")
+      try:
+        display_and_log (SYSTEM_MSG_TAG,"Subscribing to mqtt topic '%s'" % MQTT_SUB_TOPIC)
+        mqtt_client.subscribe(MQTT_SUB_TOPIC)
+      except Exception as e:
+        display_and_log ("ERROR", "'{}' on line {} [Command {}, data: '{}', port: {}]".format(str(e), sys.exc_info()[-1].tb_lineno, msg.command_name, data, port_tag))
+        print(traceback.format_exc())
+        return None
   else:
       client.is_connected = False
       display_and_log (SYSTEM_MSG_TAG,"MQTT connection failed (code {})".format(rc))
