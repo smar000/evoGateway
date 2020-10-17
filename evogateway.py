@@ -547,7 +547,7 @@ def mqtt_publish(device, command, msg, topic=None, auto_ts=True):
   try:
       if not topic:
         topic = "{}/{}/{}".format(MQTT_PUB_TOPIC, to_snake(device), command.strip())
-      timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
+      timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%XZ")
       mqtt_client.publish(topic, msg, 0, True)
       if auto_ts:
         mqtt_client.publish("{}{}".format(topic,"_ts"), timestamp, 0, True)
@@ -1558,7 +1558,7 @@ def send_command_to_evohome(command):
     command.arg_desc if command.arg_desc !="[]" else ":"), command.serial_port.tag)
 
   if mqtt_client and mqtt_client.is_connected:
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%XZ")
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%XZ")
     mqtt_client.publish("{}/failed".format(SENT_COMMAND_TOPIC), False, 0, True) # Reset this before the others, to avoid incorrect interpretation of status by 3rd party apps 
     # mqtt_client.publish("{}/failed_ts".format(SENT_COMMAND_TOPIC), "", 0, True)
     mqtt_client.publish("{}/retries".format(SENT_COMMAND_TOPIC), command.retries, 0, True)
