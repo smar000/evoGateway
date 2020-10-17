@@ -441,7 +441,6 @@ def initialise_mqtt_client(mqtt_client):
     mqtt_client.on_connect = mqtt_on_connect
     mqtt_client.on_message = mqtt_on_message
     mqtt_client.on_log = mqtt_on_log
-    mqtt_client.on_disconnect = mqtt_on_disconnect
     mqtt_client.is_connected = False # Custom attribute so that we can track connection status
 
     display_and_log (SYSTEM_MSG_TAG,"Connecting to mqtt broker '%s'" % MQTT_SERVER)
@@ -466,16 +465,6 @@ def mqtt_on_connect(client, userdata, flags, rc):
       display_and_log (SYSTEM_MSG_TAG,"MQTT connection failed (code {})".format(rc))
       if DEBUG:
           display_and_log(SYSTEM_MSG_TAG, "[DEBUG] mqtt userdata: {}, flags: {}, client: {}".format(userdata, flags, client))
-
-
-def mqtt_on_disconnect(client, userdata, rc):
-    ''' mqtt disconnection event processing '''
-    client.loop_stop()
-    client.is_connected = False
-    if rc != 0:
-        display_and_log(SYSTEM_MSG_TAG, "[WARN] Unexpected disconnection.")
-        if DEBUG:
-            display_and_log(SYSTEM_MSG_TAG, "[DEBUG] mqtt rc: {}, userdata: {}, client: {}".format(rc, userdata, client))
 
 
 def mqtt_on_log(client, obj, level, string):
