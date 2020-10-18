@@ -707,7 +707,7 @@ def process_received_message(msg):
   # Check if device is known...
   if not msg.source in devices:
       display_and_log("NEW DEVICE FOUND", msg.source)
-      devices.update({msg.source : {"name" : msg.source, "zone_id" : -1, "zoneMaster" : False  }})
+      devices.update({msg.source : {"name" : msg.source, "zoneId" : -1, "zoneMaster" : False  }})
       with open(NEW_DEVICES_FILE,'w') as fp:
           fp.write(json.dumps(devices, sort_keys=True, indent=4))
       fp.close()
