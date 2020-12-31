@@ -484,26 +484,30 @@ def mqtt_on_message(client, userdata, msg):
   global send_queue
   global last_sent_command
 
-  json_data = json.loads(str(msg.payload, "utf-8"))
-  # print(json_data)
-  log("{: <18} {}".format("MQTT_SUB", json_data))
+  try:
+    json_data = json.loads(str(msg.payload, "utf-8"))
+    #print(json_data)
+    log("{: <18} {}".format("MQTT_SUB", json_data))
 
-  if SYS_CONFIG_COMMAND in json_data:
-    if json_data[SYS_CONFIG_COMMAND] in RESET_COM_PORTS:
-      new_command = get_reset_serialports_command()
-      new_command.instruction = json.dumps(json_data)
-    elif json_data[SYS_CONFIG_COMMAND] == CANCEL_SEND_COMMANDS:
-      send_queue = []
-      last_sent_command = None
-      display_and_log(SYSTEM_MSG_TAG, "Cancelled all queued outbound commands")
-      return
-    else:
+    if SYS_CONFIG_COMMAND in json_data:
+      if json_data[SYS_CONFIG_COMMAND] in RESET_COM_PORTS:
+       new_command = get_reset_serialports_command()
+       new_command.instruction = json.dumps(json_data)
+      elif json_data[SYS_CONFIG_COMMAND] == CANCEL_SEND_COMMANDS:
+        send_queue = []
+        last_sent_command = None
+        display_and_log(SYSTEM_MSG_TAG, "Cancelled all queued outbound commands")
+        return
+     else:
       display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
       return
-  else:
-    new_command = get_command_from_mqtt_json(json_data)
+    else:
+      new_command = get_command_from_mqtt_json(json_data)
 
-  send_queue.append(new_command)
+    send_queue.append(new_command)
+  except Exception as e:
+    log("{: <18} {}".format("MQTT_SUB", e))
+    return
 
 def get_command_from_mqtt_json(json_data):
   ''' Extract command from the mqtt json payload '''
