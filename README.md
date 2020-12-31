@@ -121,14 +121,17 @@ Configuration parameters are defined in a separate file, `evogateway.cfg`, with 
     MQTT_SUB_TOPIC   = evohome/gateway/command
 
     [SENDER]
-    THIS_GATEWAY_ID     = 30:071715
+    THIS_GATEWAY_ID     = 18:056026
     THIS_GATEWAY_NAME   = EvoGateway
+    CONTROLLER_ID       = 01:139901
+
     COMMAND_RESEND_TIMEOUT_SECS = 30
     COMMAND_RESEND_ATTEMPTS = 5
 
     [MISC]
     LOG_DROPPED_PACKETS = False
 
+The value for the CONTROLLER_ID can be found in the 'DEVICES_FILE' or 'NEW_DEVICES_FILE'. Use the device ID that starts with 01:. 
 
 #### Device Definitions
 The `DEVICES_FILE` is a *json* file containing a list of the devices on the evohome network, based on their internal device IDs, e.g:
