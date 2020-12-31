@@ -1506,7 +1506,7 @@ def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
         until = dtm_string_to_payload(until_string)
         mode = 4
     elif setpoint > 0:
-        mode = 2
+        mode = 1 # 1 = Temporary, 2 = Permanent
         until = ""
     else:
         # If setpoint is 0, we revert back to auto
