@@ -840,6 +840,7 @@ def setpoint(msg):
 
         display_data_row(msg, "{:5.2f}°C{}".format(zone_setpoint,flag), zone_id)
         mqtt_publish(zone_name, "setpoint" + command_name_suffix,zone_setpoint)
+        mqtt_publish(zone_name, "zone_id", zone_id)
         i += 6
 
 
