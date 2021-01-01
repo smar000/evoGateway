@@ -11,8 +11,8 @@ DEVICES_FILE     = devices.json
 NEW_DEVICES_FILE = devices_new.json   
 
 [MQTT]
-MQTT_PUB_TOPIC      = evohome/gateway
-MQTT_SUB_TOPIC      = evohome/gateway/command
+MQTT_PUB_TOPIC   = evohome/gateway
+MQTT_SUB_TOPIC   = evohome/gateway/command
 MQTT_SERVER      = 172.16.2.8
 MQTT_USER        = openhab
 MQTT_PW          = xxxx
@@ -22,10 +22,11 @@ MQTT_CLIENTID    = evoGateway
 # Apparently the ID 18:056026 is hardcoded into the evofw3. Previous evofw2 fifo branch had 19:056026 ???
 THIS_GATEWAY_ID             = 18:056026
 THIS_GATEWAY_NAME           = EvoGateway
+CONTROLLER_ID               = 01:xxxxxx
 
 # Try to match an acknowledgement from Controller for outbound commands (unless overridden via individual command json with 'wait_for_ack') 
 COMMAND_RESEND_TIMEOUT_SECS = 10
-COMMAND_RESEND_ATTEMPTS= 3
+COMMAND_RESEND_ATTEMPTS     = 3
 AUTO_RESET_PORTS_ON_FAILURE = True
 
 [MISC]
