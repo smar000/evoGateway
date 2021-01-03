@@ -1499,15 +1499,17 @@ def get_dhw_state_payload(state_id, until_string=None, mode_id=-1):
     return payload
 
 
-def get_setpoint_override_payload(zone_id, setpoint, until_string="", override_mode=2):
-    #
-    # modes:  [Auto, -1, Permanent, -1, Temporary] (zero based)
-    #
+def get_setpoint_override_payload(zone_id, setpoint, until_string="", setpoint_is_permanenent=True):
+    """
+        modes:  [Auto, Temporary, Permanent, -1, Scheduled] (zero based)
+        If setpoint_is_permament is False, the setpoint will revert at the next scheduled setpoint change
+    """
+    
     if until_string:
         until = dtm_string_to_payload(until_string)
         mode = 4
     elif setpoint > 0:
-        mode = 2 if override_mode == None else override_mode
+        mode =  2 if setpoint_is_permanenent else 1
         until = ""
     else:
         # If setpoint is 0, we revert back to auto
