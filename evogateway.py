@@ -1446,7 +1446,8 @@ def process_send_command(command):
           zone_id = command.args["zone_id"]
           setpoint = command.args["setpoint"]
           until = command.args["until"] if "until" in command.args else None
-          command.payload = get_setpoint_override_payload(zone_id, setpoint, until)
+          mode = command.args["mode"] if "mode" in command.args else None
+          command.payload = get_setpoint_override_payload(zone_id, setpoint, until, mode)
           if command.send_mode is None:
               command.send_mode = "W"
           if until:
@@ -1503,15 +1504,17 @@ def get_dhw_state_payload(state_id, until_string=None, mode_id=-1):
     return payload
 
 
-def get_setpoint_override_payload(zone_id, setpoint, until_string=""):
-    #
-    # modes:  [Auto, -1, Permanent, -1, Temporary] (zero based)
-    #
+def get_setpoint_override_payload(zone_id, setpoint, until_string="", setpoint_is_permanenent=True):
+    """
+        modes:  [Auto, Temporary, Permanent, -1, Scheduled] (zero based)
+        If setpoint_is_permament is False, the setpoint will revert at the next scheduled setpoint change
+    """
+    
     if until_string:
         until = dtm_string_to_payload(until_string)
         mode = 4
     elif setpoint > 0:
-        mode = 2
+        mode =  2 if setpoint_is_permanenent else 1
         until = ""
     else:
         # If setpoint is 0, we revert back to auto
