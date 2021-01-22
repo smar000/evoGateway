@@ -58,7 +58,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "2.0.2"
+VERSION         = "2.0.3"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -498,9 +498,9 @@ def mqtt_on_message(client, userdata, msg):
         last_sent_command = None
         display_and_log(SYSTEM_MSG_TAG, "Cancelled all queued outbound commands")
         return
-     else:
-      display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
-      return
+      else:
+        display_and_log(SYSTEM_MSG_TAG, "System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
+        return
     else:
       new_command = get_command_from_mqtt_json(json_data)
 
@@ -508,6 +508,7 @@ def mqtt_on_message(client, userdata, msg):
   except Exception as e:
     log("{: <18} {}".format("MQTT_SUB", e))
     return
+
 
 def get_command_from_mqtt_json(json_data):
   ''' Extract command from the mqtt json payload '''
