@@ -58,7 +58,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "2.0.3"
+VERSION         = "2.1.0"
 CONFIG_FILE     = "evogateway.cfg"
 
 # --- Configs/Default
@@ -868,18 +868,42 @@ def setpoint_override(msg):
 
 
 def zone_temperature(msg):
-  temperature = float(int(msg.payload[2:6],16))/100
-  zone_id=0
-  if devices.get(msg.source_id):
-    zone_id = devices[msg.source_id]["zoneId"]
-  else:
-    display_and_log("DEBUG","Device not found for source " + msg.source_id)
-  if zone_id >0:
-    zoneDesc = " [Zone " + str(zone_id) + "]"
-  else:
-    zoneDesc = ""
-  display_data_row(msg, "{:5.2f}°C".format(temperature), zone_id)
-  mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name), "temperature",temperature)
+  """
+      zone_temperature info sent singly by individual devices and also by the controller for multiple zones in one message.
+      Controller only seems to be sending zone_temperature data for single room zones. 
+      For multi-room zones, we have to rely  the sending device for its temperature value    
+  """
+  
+  if msg.payload_length == 1:
+    display_data_row(msg, "Zone temperature requested")
+  elif msg.payload_length % 3 != 0:
+    display_and_log(msg.command_name, "Invalid payload length of {} (should be 1 or mod 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
+    return
+
+  i = 0
+  payload_string_length = msg.payload_length * 2
+  while (i < payload_string_length):
+    zone_data = msg.payload[i:i+6]
+
+    # If msg from controller, then get the zone_id from the data block. Otherwise use the zone_id of the msg sender
+    if msg.source_id == CONTROLLER_ID: 
+      zone_id = int(zone_data[:2], 16) + 1
+    elif devices.get(msg.source_id):
+      zone_id = devices[msg.source_id]["zoneId"]
+    else:
+      zone_id = 0
+      display_and_log("DEBUG","Device not found for source ID {}".format(msg.source_id))
+
+    # temperature = float(int(msg.payload[i+2:i+6],16))/100
+    temperature = convert_from_twos_comp(zone_data[2:6])
+    if zone_id != 0:
+      zoneDesc = " [Zone " + str(zone_id) + "]"
+    else:
+      zoneDesc = ""
+    display_data_row(msg, "{:5.2f}°C".format(temperature), zone_id)
+    mqtt_publish("{}/{}".format(zones[zone_id], msg.source_name), "temperature",temperature)
+
+    i += 6
 
 
 def window_status(msg):
@@ -1763,7 +1787,7 @@ while ports_open:
             if send_queue and len(send_queue) != send_queue_size_displayed:
               display_and_log("DEBUG","{} command(s) queued for sending to controller".format(len(send_queue)))
           elif len(send_queue) != send_queue_size_displayed:
-            print("last_send_command: wait for ack: {}".format(last_sent_command.wait_for_ack))
+            # print("last_send_command: wait for ack: {}".format(last_sent_command.wait_for_ack))
             display_and_log("DEBUG","{} command(s) queued and held, pending acknowledgement of '{}' command previously sent".format(len(send_queue), last_sent_command.command_name))
           send_queue_size_displayed = len(send_queue)
 
