@@ -2,6 +2,17 @@
 
 ![alt text](./evogateway.png "evoListener screenshot")
 
+## WIP - Migration of decoding/encoding/transmitting to evohome_rf library
+***Feb 2021: Experimental build***  Replacing the message decoding/encoding and sending code with the excellent *evohome_rf* library (https://github.com/zxdavb/evohome_rf). David's library is much more robust, comprehensive, up-to-date and fully asynchronous, and so makes logical sense to incorporate his library as the backend for evogateway. Thank you David (@zxdavb) for your help and support in the migration!
+
+There are a number of breaking changes in the build at the moment, including the MQTT topics that messages are posted to. 
+
+There is also a new `schema.json` file, based on the evohome_rf schema (see https://github.com/zxdavb/evohome_rf/wiki/Notes-on-the-Schema). This file can be generated via the evohome_rf `client.py` for now if required. Otherwise, if the `devices.json` is populated, a basic schema will be auto-generated internally.
+
+
+
+
+_________________________
 
 ***Update 28/08/2019***: Added auto-retry for failed sending of commands; added send command status updates to mqtt topic; added custom send commands capability.
 

@@ -1,14 +1,13 @@
 [Serial Port]
-#COM_PORTS = {"/dev/evoftdi": {"baud" : 76800, "retry_limit": 10, "is_send_port": true}, "/dev/evoqinheng": {"baud" : 115200, "retry_limit": 10, "is_send_port": false}}
 COM_PORT         = /dev/evogateway
-COM_BAUD         = 115200
-COM_RETRY_LIMIT  = 10
+
 
 [Files]
 EVENTS_FILE      = events.log
 LOG_FILE         = evogateway.log
 DEVICES_FILE     = devices.json
 NEW_DEVICES_FILE = devices_new.json   
+SCHEMA_FILE                 = schema.json
 
 [MQTT]
 MQTT_PUB_TOPIC   = evohome/gateway
@@ -19,18 +18,17 @@ MQTT_PW          = xxxx
 MQTT_CLIENTID    = evoGateway
 
 [SENDER]
-# Apparently the ID 18:056026 is hardcoded into the evofw3. Previous evofw2 fifo branch had 19:056026 ???
-THIS_GATEWAY_ID             = 18:056026
 THIS_GATEWAY_NAME           = EvoGateway
 CONTROLLER_ID               = 01:xxxxxx
+GATEWAY_DISABLE_SENDING     = False
 
 # Try to match an acknowledgement from Controller for outbound commands (unless overridden via individual command json with 'wait_for_ack') 
 COMMAND_RESEND_TIMEOUT_SECS = 10
-COMMAND_RESEND_ATTEMPTS     = 3
-AUTO_RESET_PORTS_ON_FAILURE = True
+COMMAND_RESEND_ATTEMPTS     = 2
+
 
 [MISC]
-DROP_DUPLICATE_MESSAGES     = True
-LOG_DROPPED_PACKETS         = True
+# Display full json string from evohome_rf, or just key data item for each row 
+DISPLAY_FULL_JSON            = False
 MAX_LOG_HISTORY             = 10
 
