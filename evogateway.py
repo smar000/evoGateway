@@ -140,6 +140,7 @@ DEVICE_TYPE["07"] = "DHW"  # Hotwater wireless Sender
 DEVICE_TYPE["10"] = "OTB"  # OpenTherm Bridge
 DEVICE_TYPE["18"] = "CUL"  # This fake HGI80
 DEVICE_TYPE["19"] = "CUL"  # Also fake HGI80 - used by evofw2?
+DEVICE_TYPE["12"] = "CM927"# CM927 thermostat
 DEVICE_TYPE["13"] = "BDR"  # BDR relays
 DEVICE_TYPE["30"] = "GWAY" # Mobile Gateway such as RGS100
 DEVICE_TYPE["34"] = "STAT" # Wireless round thermostats T87RF2033 or part of Y87RF2024 
@@ -1245,6 +1246,18 @@ def fault_log(msg):
     mqtt_publish("_faults", str(log_entry_number), json.dumps(msg))
 
 
+def mix_zone_valve_cfg(msg):
+    zone = int(msg.payload[0:2], 16)
+    max_flow_setpoint = int(msg.payload[4:8], 16)
+    min_flow_setpoint = int(msg.payload[10:14], 16)
+    valve_run_time = int(msg.payload[16:20], 16)
+    pump_run_time = int(msg.payload[22:26], 16)
+    const_0101 = int(msg.payload[28:32], 16)
+
+    display_data_row(msg, "zone={}, max_flow={}, min_flow={}, valve_run_time={}s, pump_run_time={}s".format(
+        zone, max_flow_setpoint, min_flow_setpoint, valve_run_time, pump_run_time))
+
+
 def battery_info(msg):
   if msg.payload_length != 3:
     display_and_log(msg.command_name, "Invalid payload length of {} (should be 3). Raw msg: {}".format(msg.payload_length, msg.rawmsg))
@@ -1643,6 +1656,7 @@ COMMANDS = {
   '0100': language,
   # '0404': zone_schedule, 
   '0418': fault_log,
+  '1030': mix_zone_valve_cfg,
   '1060': battery_info,
   '10A0': dhw_settings,
   '10E0': heartbeat,
@@ -1680,6 +1694,7 @@ COMMAND_CODES = {
   "external_sensor": "0002",
   "heartbeat" : "10E0",
   "language"  : "0100",
+  "mix_zone_valve_cfg": "1030",
   "opentherm_msg" : "3220",
   "opentherm_ticker" : "1fd4",
   "other_command" : "0100",
