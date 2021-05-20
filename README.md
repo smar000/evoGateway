@@ -9,8 +9,8 @@ There are a number of breaking changes in the build at the moment, including the
 
 There is also a new `schema.json` file, based on the evohome_rf schema (see https://github.com/zxdavb/evohome_rf/wiki/Notes-on-the-Schema). This file can be generated via the evohome_rf `client.py` for now if required. Otherwise, if the `devices.json` is populated, a basic schema will be auto-generated internally.
 
-May 2021: 
-    - Updated to use the lates evohome_rf library (recently renamed to `ramses_rf`)
+*** May 2021:***
+    - Updated to use the latest evohome_rf library (recently renamed to `ramses_rf`)
     - Added support for ramses_rf built in send command constructors
     - Added support for sending commands. Note that this is a further breaking change as both command names and the mqtt command message formats have changed
 
@@ -42,9 +42,7 @@ Command Code 2309: set_zone_setpoint(ctl_id, zone_idx, setpoint)
 
 The controller ID keyword `ctl_id` is optional and if not provided in the JSON message, will default to the ID defined in the config file. An example JSON mqtt message for getting the 1st system log entry from the Controller would now be:
 
-`{"command" : "get_system_log_entry", "kwargs": {"log_idx": 0}}`
-
-Note the the nested `kwargs` which must contain the mandatory keyword arguments for any given command (except the `ctl_id` as mentioned above). 
+`{"command" : "get_system_log_entry", "log_idx": 0}`
 
 Instead of using the built-in ramses_rf command constructors, command codes can still be sent directly but require . However, the json message format has again been updated to keep in line with the ramses_rf code. An equivalent example for getting the 1st system log entry but using the command code would be:
 

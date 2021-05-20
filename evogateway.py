@@ -560,12 +560,15 @@ def mqtt_process_msg(msg):
                 command_name = json_data["command"]
                 if command_name and command_name == "ping":
                     command_name = "get_system_time"
+
                 cmd_method = getattr(Command, command_name)
                 cmd_kwargs = sorted(list(inspect.signature(cmd_method).parameters.keys()))
-                kwargs = json_data["kwargs"] if "kwargs" in json_data else {}
+                kwargs = {x: json_data[x] for x in json_data if x not in "command"}                
                 if not "ctl_id" in kwargs and "ctl_id" in cmd_kwargs:
                     kwargs["ctl_id"] = CONTROLLER_ID                    
+
                 gw_cmd = cmd_method(**kwargs)                
+                
             else:
                 log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'command_code' must be specified")
                 return
@@ -639,30 +642,34 @@ def initialise_sys(kwargs):
     lib_kwargs, _ = _proc_kwargs(({CONFIG: {}}, {}), kwargs)
     
     if SCHEMA_FILE is not None:
+        log.info(f"Loading schema from file '{SCHEMA_FILE}'")
         with open(SCHEMA_FILE) as config_schema:
             lib_kwargs.update(json.load(config_schema))
         if COM_PORT: # override with the one in the main config file
             lib_kwargs[CONFIG][SERIAL_PORT] = COM_PORT
+        log.debug(f"Schema loaded. Updated lib_kwargs: {lib_kwargs}")
     else:        
         # ramses_rf schema file not found. Build a skeleton schema from evogateway config file
+        log.info("No schema file specified. Creating a basic schema")
         schema = {"config": { "disable_sending": False, "disable_discovery": False,"enforce_allowlist": None,"enforce_blocklist": None,
                 "evofw_flag": None, "max_zones": 12, "packet_log": PACKET_LOG_FILE,"serial_port": COM_PORT, "use_names": True, "use_schema": True},
                 "schema" : { "controller": CONTROLLER_ID}}
         lib_kwargs.update(schema)
+        log.debug(f"Updated lib_kwargs: {lib_kwargs}")
 
         if DEVICES:
-            allowlist = {"allowlist": {}}
+            allow_list = {"allow_list": {}}
             # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
             for d in DEVICES:
-                allowlist["allowlist"][d] = {"name" : DEVICES[d]["name"]}    
-            lib_kwargs.update(allowlist)
+                allow_list["allow_list"][d] = {"name" : DEVICES[d]["name"]}    
+            lib_kwargs.update(allow_list)
 
         log.debug(f"Auto generated config schema: {json.dumps(lib_kwargs)}")
 
     lib_kwargs[CONFIG][DISABLE_SENDING] = GATEWAY_DISABLE_SENDING
     log.info(f"# evogateway {VERSION}")
-    print_formatted_row('',  text=f"# evogateway {VERSION}")
-    
+    print_formatted_row('',  text=f"{Style.BRIGHT}{Fore.YELLOW}# evogateway {VERSION}")
+        
     return lib_kwargs
     
 
@@ -674,7 +681,7 @@ async def main(**kwargs):
     serial_port, lib_kwargs = normalise_config_schema(lib_kwargs)
     GWY = Gateway(serial_port, **lib_kwargs)
     # GWY = Gateway(lib_kwargs[CONFIG].pop(SERIAL_PORT, COM_PORT), **lib_kwargs)
-    protocol, _ = GWY.create_client(process_gwy_message)    
+    protocol, _ = GWY.create_client(process_gwy_message)        
     mqtt_publish_schema()
     
     try:  
