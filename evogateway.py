@@ -540,14 +540,14 @@ def mqtt_process_msg(msg):
                 print_formatted_row(SYSTEM_MSG_TAG,  text="System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
                 return
         else:                        
-            if "command_code" in json_data:
-                command_code = json_data["command_code"]
+            if "code" in json_data:
+                command_code = json_data["code"]
                 if type(command_code) is int:
                     command_code = hex(command_code)
                     command_code = command_code.upper().replace("0X","")
 
                 if not ("verb" in json_data and "payload" in json_data):
-                    log.error(f"Failed to send command '{command_code}'. Both 'verb' and 'payload' must be provided when the 'command_code' is used")
+                    log.error(f"Failed to send command '{command_code}'. Both 'verb' and 'payload' must be provided when 'code' is used instead of 'command'")
                     return
 
                 verb = json_data["verb"]
@@ -568,9 +568,9 @@ def mqtt_process_msg(msg):
                     kwargs["ctl_id"] = CONTROLLER_ID                    
 
                 gw_cmd = cmd_method(**kwargs)                
-                
+
             else:
-                log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'command_code' must be specified")
+                log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'code' must be specified")
                 return
             
             # resp = asyncio.run(GWY.async_send_cmd(gw_cmd, **kwargs))

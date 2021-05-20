@@ -1,43 +1,36 @@
 # Evohome Listener/Sender Gateway
 
-## WIP - Migration of decoding/encoding/transmitting to evohome_rf library
-***Feb 2021: Experimental build***  Replacing the message decoding/encoding and sending code with the excellent *evohome_rf* library (https://github.com/zxdavb/evohome_rf). David's library is much more robust, comprehensive, up-to-date and fully asynchronous, and so makes logical sense to incorporate his library as the backend for evogateway. Thank you David (@zxdavb) for your help and support in the migration!
+## WIP - Migration of decoding/encoding/transmitting to ramses_rf library
 
-Stating the obvious, but the evohome_rf library will of course need to be installed first!
-
-There are a number of breaking changes in the build at the moment, including the MQTT topics that messages are posted to. 
-
-There is also a new `schema.json` file, based on the evohome_rf schema (see https://github.com/zxdavb/evohome_rf/wiki/Notes-on-the-Schema). This file can be generated via the evohome_rf `client.py` for now if required. Otherwise, if the `devices.json` is populated, a basic schema will be auto-generated internally.
-
-*** May 2021:***
-    - Updated to use the latest evohome_rf library (recently renamed to `ramses_rf`)
-    - Added support for ramses_rf built in send command constructors
-    - Added support for sending commands. Note that this is a further breaking change as both command names and the mqtt command message formats have changed
+***20 Mar 2021 Update***  
+- Updated to use the latest `ramses_rf` library (previously called to `evohome_rf`)
+- Added support for ramses_rf built in send command constructors
+- Added support for sending commands. Note that this is a further breaking change as both command names and the mqtt command message formats have changed
 
 Command naming follows the ramses_rf command constructor methods (as defined in its Command class). As of the 20 May 2021, the following constructor methods are available, along with their respective list of keyword arguments (note that not all the arguments are mandatory):
 
 ```
-Command Code 1F41: get_dhw_mode(ctl_id)
-Command Code 0404: get_dhw_schedule_fragment(ctl_id, frag_idx, frag_cnt)
-Command Code 3220: get_opentherm_data(dev_id, msg_id)
-Command Code 0418: get_system_log_entry(ctl_id, log_idx)
-Command Code 2E04: get_system_mode(ctl_id)
-Command Code 313F: get_system_time(ctl_id)
-Command Code 1100: get_tpi_params(ctl_id)
-Command Code 000A: get_zone_config(ctl_id, zone_idx)
-Command Code 2349: get_zone_mode(ctl_id, zone_idx)
-Command Code 0004: get_zone_name(ctl_id, zone_idx)
-Command Code 0404: get_zone_schedule_fragment(ctl_id, zone_idx, frag_idx, frag_cnt)
-Command Code 1F41: set_dhw_mode(ctl_id, mode, active, until)
-Command Code 10A0: set_dhw_params(ctl_id, setpoint, overrun, differential)
-Command Code 1030: set_mix_valve_params(ctl_id, zone_idx, max_flow_setpoint, min_flow_setpoint, valve_run_time, pump_run_time)
-Command Code 2E04: set_system_mode(ctl_id, system_mode, until)
-Command Code 313F: set_system_time(ctl_id, datetime)
-Command Code 1100: set_tpi_params(ctl_id, domain_id, cycle_rate, min_on_time, min_off_time, proportional_band_width)
-Command Code 000A: set_zone_config(ctl_id, zone_idx, min_temp, max_temp, local_override, openwindow_function, multiroom_mode)
-Command Code 2349: set_zone_mode(ctl_id, zone_idx, mode, setpoint, until)
-Command Code 0004: set_zone_name(ctl_id, zone_idx, name)
-Command Code 2309: set_zone_setpoint(ctl_id, zone_idx, setpoint)
+Code 1F41, Command:  get_dhw_mode(ctl_id)
+Code 0404, Command:  get_dhw_schedule_fragment(ctl_id, frag_idx, frag_cnt)
+Code 3220, Command:  get_opentherm_data(dev_id, msg_id)
+Code 0418, Command:  get_system_log_entry(ctl_id, log_idx)
+Code 2E04, Command:  get_system_mode(ctl_id)
+Code 313F, Command:  get_system_time(ctl_id)
+Code 1100, Command:  get_tpi_params(ctl_id)
+Code 000A, Command:  get_zone_config(ctl_id, zone_idx)
+Code 2349, Command:  get_zone_mode(ctl_id, zone_idx)
+Code 0004, Command:  get_zone_name(ctl_id, zone_idx)
+Code 0404, Command:  get_zone_schedule_fragment(ctl_id, zone_idx, frag_idx, frag_cnt)
+Code 1F41, Command:  set_dhw_mode(ctl_id, mode, active, until)
+Code 10A0, Command:  set_dhw_params(ctl_id, setpoint, overrun, differential)
+Code 1030, Command:  set_mix_valve_params(ctl_id, zone_idx, max_flow_setpoint, min_flow_setpoint, valve_run_time, pump_run_time)
+Code 2E04, Command:  set_system_mode(ctl_id, system_mode, until)
+Code 313F, Command:  set_system_time(ctl_id, datetime)
+Code 1100, Command:  set_tpi_params(ctl_id, domain_id, cycle_rate, min_on_time, min_off_time, proportional_band_width)
+Code 000A, Command:  set_zone_config(ctl_id, zone_idx, min_temp, max_temp, local_override, openwindow_function, multiroom_mode)
+Code 2349, Command:  set_zone_mode(ctl_id, zone_idx, mode, setpoint, until)
+Code 0004, Command:  set_zone_name(ctl_id, zone_idx, name)
+Code 2309, Command:  set_zone_setpoint(ctl_id, zone_idx, setpoint)
 ```
 
 The controller ID keyword `ctl_id` is optional and if not provided in the JSON message, will default to the ID defined in the config file. An example JSON mqtt message for getting the 1st system log entry from the Controller would now be:
@@ -46,10 +39,19 @@ The controller ID keyword `ctl_id` is optional and if not provided in the JSON m
 
 Instead of using the built-in ramses_rf command constructors, command codes can still be sent directly but require . However, the json message format has again been updated to keep in line with the ramses_rf code. An equivalent example for getting the 1st system log entry but using the command code would be:
 
-`{"command_code" : "0418", "verb": "RQ", "payload": "000000"}`
+`{"code" : "0418", "verb": "RQ", "payload": "000000"}`
 
 Note that `verb` and `payload` are mandatory when using `command_code` instead of the ramses_rf built-in command constructors as above.
 
+
+
+***Feb 2021: Experimental build***  Replacing the message decoding/encoding and sending code with the excellent *evohome_rf* library (https://github.com/zxdavb/evohome_rf). David's library is much more robust, comprehensive, up-to-date and fully asynchronous, and so makes logical sense to incorporate his library as the backend for evogateway. Thank you David (@zxdavb) for your help and support in the migration!
+
+Stating the obvious, but the evohome_rf library will of course need to be installed first!
+
+There are a number of breaking changes in the build at the moment, including the MQTT topics that messages are posted to. 
+
+There is also a new `schema.json` file, based on the evohome_rf schema (see https://github.com/zxdavb/evohome_rf/wiki/Notes-on-the-Schema). This file can be generated via the evohome_rf `client.py` for now if required. Otherwise, if the `devices.json` is populated, a basic schema will be auto-generated internally.
 
 _______
 
