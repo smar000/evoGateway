@@ -10,6 +10,8 @@ from typing import Tuple
 from signal import SIGINT, SIGTERM
 import os,sys
 import traceback
+import inspect
+import traceback
 import configparser
 import paho.mqtt.client as mqtt
 import time, datetime
@@ -18,27 +20,9 @@ import logging
 from logging.handlers import RotatingFileHandler
 from datetime import timedelta as td
 
-from evohome_rf import Gateway, GracefulExit
-from evohome_rf.command import Command
-from evohome_rf.discovery import (
-    EXECUTE_CMD,
-    GET_FAULTS,
-    GET_SCHED,
-    SET_SCHED,
-    SCAN_DISC,
-    SCAN_FULL,
-    SCAN_HARD,
-    SCAN_XXXX,
-    spawn_execute_scripts,
-    spawn_monitor_scripts,
-)
-from evohome_rf.exceptions import EvohomeError
-from evohome_rf.helpers import is_valid_dev_id
-from evohome_rf.packet import CONSOLE_COLS
-from evohome_rf.message import CODE_NAMES as CODE_NAMES
-from evohome_rf.discovery import spawn_execute_cmd
-from evohome_rf.const import NON_DEVICE_ID, DEVICE_TABLE
-from evohome_rf.schema import (
+from ramses_rf import Gateway, GracefulExit
+from ramses_rf.command import Command
+from ramses_rf.schema import (
     ALLOW_LIST,
     CONFIG,
     DISABLE_DISCOVERY,
@@ -47,10 +31,18 @@ from evohome_rf.schema import (
     ENFORCE_ALLOWLIST,
     EVOFW_FLAG,
     INPUT_FILE,
+    LOG_FILE_NAME,
     PACKET_LOG,
+    PACKET_LOG_SCHEMA,
     REDUCE_PROCESSING,
-    SERIAL_PORT,
+    SERIAL_PORT
 )
+from ramses_rf.exceptions import EvohomeError
+from ramses_rf.helpers import is_valid_dev_id
+from ramses_rf.packet import CONSOLE_COLS
+from ramses_rf.message import CODE_NAMES as CODE_NAMES
+from ramses_rf.discovery import spawn_execute_cmd
+from ramses_rf.const import NON_DEVICE_ID, DEVICE_TABLE
 
 LIB_KEYS = (
     INPUT_FILE,
@@ -69,7 +61,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.0_alpha6"
+VERSION         = "3.0.0_alpha8"
 
 
 CONFIG_FILE     = "evogateway.cfg"
@@ -115,8 +107,6 @@ THIS_GATEWAY_TYPE_ID = THIS_GATEWAY_ID.split(":")[0]
 
 GATEWAY_DISABLE_SENDING = config.getboolean("SENDER", "DISABLE_SENDING", fallback=False)
 
-# COMMAND_RESEND_TIMEOUT_SECS = float(getConfig(config,"SENDER", "COMMAND_RESEND_TIMEOUT_SECS", 60.0))
-# COMMAND_RESEND_ATTEMPTS= int(getConfig(config,"SENDER", "COMMAND_RESEND_ATTEMPTS", 3))    # A value of zero also disables waiting for sent command acknowledgements
 # AUTO_RESET_PORTS_ON_FAILURE = getConfig(config,"SENDER", "AUTO_RESET_PORTS_ON_FAILURE", "False").lower() == "true"
 
 DISPLAY_FULL_JSON = config.getboolean("MISC", "DISPLAY_FULL_JSON", fallback=False)
@@ -155,7 +145,7 @@ log.addHandler(file_handler)
 
 # Log console handler 
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.ERROR)
+console_handler.setLevel(logging.WARNING)
 console_handler.setFormatter(formatter)
 log.addHandler(console_handler)
 
@@ -338,7 +328,7 @@ def process_gwy_message(msg) -> None:
     log.debug("") # spacer, as we have other debug entries for a given received msg
     log.info(msg)  # Log event to file
 
-    # Message class in evohome_rf lib does not have the code name, so add it
+    # Message class in ramses_rf lib does not have the code name, so add it
     msg.code_name = CODE_NAMES[msg.code]
     
     if DISPLAY_FULL_JSON: 
@@ -348,7 +338,7 @@ def process_gwy_message(msg) -> None:
     payload = [msg.payload] if not isinstance(msg.payload, list) else msg.payload               
 
     for item in payload:
-        # evohome_rf library sends each item as a dict
+        # ramses_rf library sends each item as a dict
         try:
             if type(item) != dict: 
                 log.warn(f"        -> process_gwy_message: 0. item is not dict. type(item): {type(item)}, item: {item}, type(payload): {type(payload)}")
@@ -366,7 +356,7 @@ def process_gwy_message(msg) -> None:
 
 
 def display_full_msg(msg):
-    """ Show the full json payload (as in the evohome_rf cli client) """
+    """ Show the full json payload (as in the ramses_rf cli client) """
     dtm = f"{msg.dtm:%H:%M:%S.%f}"[:-3]
     if msg.src.type == "18":
         print(f"{Style.BRIGHT}{COLORS.get(msg.verb)}{dtm} {msg}"[:CONSOLE_COLS])
@@ -410,7 +400,6 @@ def display_simple_msg(msg, payload_dict, target_zone=-1, suffix_text=""):
 
 def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", style_prefix=""):
     dtm = datetime.datetime.now().strftime("%Y-%m-%d %X")
-    formatted_dst = f"{dst}" if dst else ""
     if src:
         row = f"{dtm} |{rssi}| {src:<21} -> {dst:<21} |{verb:<2}| {cmd:<15} | {text}"
     else:
@@ -419,11 +408,8 @@ def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", st
     print(f"{Style.RESET_ALL}{style_prefix}{row.strip()}{Style.RESET_ALL}")
     
 
-def rq_callback(msg) -> None:
-    print(f"-----------------> rq_callback: {msg}")
-
-def rp_callback(msg) -> None:
-    print(f"=================> rp_callback: {msg}")
+def send_command_callback(msg) -> None:
+    print(f"=================> send_command_callback: {msg}")
 
 
 
@@ -537,10 +523,11 @@ def mqtt_publish_schema():
     MQTT_CLIENT.publish(f"{topic}/_gateway_config_ts", timestamp, 0, True)
 
 
-def mqtt_process_msg(payload):
+def mqtt_process_msg(msg):
+    log.debug(f"MQTT message received: {msg}")
+
     try:
-        log.debug(f"MQTT message received: {payload}")
-        json_data = json.loads(payload)        
+        json_data = json.loads(msg)        
 
         if SYS_CONFIG_COMMAND in json_data:
             if json_data[SYS_CONFIG_COMMAND].upper().strip() == "DISPLAY_FULL_JSON":
@@ -549,167 +536,69 @@ def mqtt_process_msg(payload):
                 
             elif json_data[SYS_CONFIG_COMMAND].upper().strip() == "POST_SCHEMA":
                 mqtt_publish_schema()
-            elif json_data[SYS_CONFIG_COMMAND] == CANCEL_SEND_COMMANDS:
-                send_queue = []
-                last_sent_command = None
-                print_formatted_row(SYSTEM_MSG_TAG,  text="Cancelled all queued outbound commands")
-                return
             else:
                 print_formatted_row(SYSTEM_MSG_TAG,  text="System configuration command '{}' not recognised".format(json_data[SYS_CONFIG_COMMAND]))
                 return
-        else:
-            command_name = json_data["command"] if "command" in json_data else None
-            command_code = json_data["command_code"] if "command_code" in json_data else None
-            if command_code:
+        else:                        
+            if "command_code" in json_data:
+                command_code = json_data["command_code"]
                 if type(command_code) is int:
                     command_code = hex(command_code)
                     command_code = command_code.upper().replace("0X","")
-            if command_name or command_code:
-                args = json_data["arguments"] if "arguments" in json_data else {}
-                send_mode = json_data["send_mode"] if "send_mode" in json_data else None
 
-            new_command = MQTTCommand(command_code=command_code, command_name=command_name, args=args, send_mode=send_mode, instruction=json.dumps(json_data))    
-            # new_command.wait_for_ack = json_data["wait_for_ack"] if "wait_for_ack" in json_data else COMMAND_RESEND_ATTEMPTS > 0
-            # new_command.reset_ports_on_fail = json_data["reset_ports_on_fail"] if "reset_ports_on_fail" in json_data else AUTO_RESET_PORTS_ON_FAILURE
+                if not ("verb" in json_data and "payload" in json_data):
+                    log.error(f"Failed to send command '{command_code}'. Both 'verb' and 'payload' must be provided when the 'command_code' is used")
+                    return
 
-            updated_command = build_send_string(new_command)
-            log.debug(f"MQTT message received: {payload}. Converted to command string: {updated_command.send_string}")
-            
-            cmd_args = {EXECUTE_CMD : updated_command.send_string }                    
-            cb_rq = {"func": rq_callback, "timeout": 10}
-            gw_cmd = Command(updated_command.send_mode, updated_command.dev2, updated_command.command_code, updated_command.payload, callback=cb_rq)
-            # print(f"-----------> gw_cmd: {gw_cmd}")
+                verb = json_data["verb"]
+                payload = json_data["payload"]
+                dest_id = json_data["dest_id"] if "dest_id" in json_data else CONTROLLER_ID
+                gw_cmd = Command(verb, command_code, payload, dest_id)
+                log.debug(f"--------> MQTT message converted to Command: '{gw_cmd}'")
 
-            cb_rp = {"func": rp_callback, "timeout": 10}   
-            try:         
-                # kwargs = {"timeout": 8}
-                kwargs = {}
-                resp = asyncio.run(GWY.async_send_cmd(gw_cmd, **kwargs))
-                print(f"-----------> async resp: {resp}")
-
-            except TimeoutError:
-                log.warning(f"-----------> command failed due to timed out")
-            
-            # GWY.send_cmd(gw_cmd, callback=rp_callback)
-            # GWY.send_data(Command("RQ", "01:139901", "313F", "00"))
-            # spawn_execute_cmd(GWY, **cmd_args)
-    except Exception as e:
-        log.error(f"Exception occurred in process mqtt msg:{payload}\n{e}", exc_info=True)
-        return
-
-
-def build_send_string(command):
-    ''' Build the send string for GWY'''
-
-    if not command.command_code and not command.command_name:
-        print_formatted_row("ERROR", text="Cannot process command without valid command_code ({}) or command_name ({}) [args: '{}']".format(
-            command.command_code, command.command_name, args))
-        return
-
-    # Check and do system config commands first
-    if command.command_code == SYS_CONFIG_COMMAND:
-        # if command.command_name == RESET_COM_PORTS:
-        #     reset_com_ports()
-        # else:
-        print_formatted_row(SYSTEM_MSG_TAG,  text="System configuration command '{}' not recognised".format(command.command_name))
-        return # Either way, we return. Rest of the fn is processing actual evohome commands
-    elif command.command_name == "ping":
-        command.command_name = "datetime"
-        
-    if not command.command_name: # command_name takes priority over command_code        
-        if command.command_code in CODE_NAMES:
-            command.command_name = CODE_NAMES[command.command_code]
-        else:
-            print_formatted_row("DEBUG",  text="Command name not found for code '{}'".format(command.command_code))
-    
-    if command.command_name and not command.command_code:
-        # Command must be an evohome one. Process and send.    
-        codes_array = [k for k in CODE_NAMES if CODE_NAMES[k] == command.command_name]
-        command.command_code = codes_array[0] if len(codes_array) > 0 else None       
-
-    if not command.command_code or command.command_code == "0000":
-        print_formatted_row("ERROR",  text="Unrecognised command.command_name '{}'".format(command.command_name))
-        return
-
-    send_string = ""
-    try:
-        if "payload" not in command.args or not command.command_code:
-            if (command.command_name and command.command_name == "dhw_mode") or (command.command_code and command.command_code == "1F41"):
-                # 1F41: Change dhw mode
-                state_id = command.args["state_id"]
-                until = command.args["until"] if "until" in command.args else None
-                mode_id = command.args["mode_id"] if "mode_id" in command.args else -1
-                command.payload = get_dhw_state_payload(state_id, until, mode_id)
-                if command.send_mode is None:
-                    command.send_mode = "W"
-                if until:
-                    command.arg_desc ="[{} until {}]".format("ON" if state_id == 1 else "OFF", until)
-                else:
-                    command.arg_desc ="[{}]".format("ON" if state_id == 1 else "OFF")
-
-            elif (command.command_name and command.command_name in "datetime ping") or (command.command_code and command.command_code == "313F"):
-                # 0x313F: Send a datetime update request, i.e. like a ping
-                command.payload = "00"
-                if command.send_mode is None:
-                    command.send_mode = "RQ"
-
-            elif command.command_name and command.command_name in "system_fault":
-                # Default to getting last log entry           
-                command.payload = "000000"
-                command.send_mode = "RQ"
-
-            elif (command.command_name and command.command_name == "system_mode") or (command.command_code and command.command_code == "2E04"):
-                # 0x2E04: Set controller mode
-                mode = command.args["mode"]
-                until = command.args["until"] if "until" in command.args else None
-                command.payload = get_controller_mode_payload(mode, until)
-
-                # Send mode needs to be 'W' to set the controller to the new controller mode
-                if command.send_mode is None:
-                    command.send_mode = "W"
-                if until:
-                    command.arg_desc = "[{} until {}]".format(mode, until)
-                else:
-                    command.arg_desc = mode
-
-            elif (command.command_name and command.command_name == "zone_mode") or (command.command_code and command.command_code == "2349"):
-                # 0x2349: Setpoint override
-                zone_id = command.args["zone_id"]
-                setpoint = command.args["setpoint"]
-                until = command.args["until"] if "until" in command.args else None
-                mode = command.args["mode"] if "mode" in command.args else None
-                command.payload = get_setpoint_override_payload(zone_id, setpoint, until, mode)
-                if command.send_mode is None:
-                    command.send_mode = "W"
-                if until:
-                    command.arg_desc = "['{}': {} degC until {}]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint, until)
-                else:
-                    command.arg_desc = command.arg_desc = "['{}': {} deg C]".format(zones[zone_id] if zone_id in zones else zone_id, setpoint)
+            elif "command" in json_data:
+                command_name = json_data["command"]
+                if command_name and command_name == "ping":
+                    command_name = "get_system_time"
+                cmd_method = getattr(Command, command_name)
+                cmd_kwargs = sorted(list(inspect.signature(cmd_method).parameters.keys()))
+                kwargs = json_data["kwargs"] if "kwargs" in json_data else {}
+                if not "ctl_id" in kwargs and "ctl_id" in cmd_kwargs:
+                    kwargs["ctl_id"] = CONTROLLER_ID                    
+                gw_cmd = cmd_method(**kwargs)                
             else:
-                if not command.send_mode: # default to RQ
-                    command.send_mode = "RQ"
-        else:
-            command.payload = command.args["payload"]
-            if command.send_mode is None:
-                command.send_mode = "I"
+                log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'command_code' must be specified")
+                return
+            
+            # resp = asyncio.run(GWY.async_send_cmd(gw_cmd, **kwargs))
+            # print(f"=============> async resp: {resp}")
 
-        command.dev1 = command.args["dev1"] if "dev1" in command.args else THIS_GATEWAY_ID
-        command.dev2 = command.args["dev2"] if "dev2" in command.args else CONTROLLER_ID
-        command.dev3 = command.args["dev3"] if "dev3" in command.args else EMPTY_DEVICE_ID
+            log.debug(f"Sending command: {gw_cmd}")        
+            GWY.send_cmd(gw_cmd, callback=send_command_callback)
 
-        command.destination = command.dev2
-        # command.send_string = "{} --- {} {} {} {:<4} {:03d} {}".format(command.send_mode, command.dev1,
-        #                       command.dev2, command.dev3, command.command_code, command.payload_length(), command.payload)
+    except TimeoutError:
+        log.warning(f"Command '{gw_cmd if gw_cmd else msg}' failed due to time out")
 
-        command.send_string = f"{command.send_mode} {command.dev2} {command.command_code:<4} {command.payload}"
-        log.debug("Send command string: {}".format(command.send_string))
+    except Exception as ex:
+        log.error(f"Error in sending command '{command_name}': {ex}")                      
+        print(traceback.format_exc())
+    
 
-        return command
 
-    except Exception as e:
-        log.error(f"Exception occured: {e}", exc_info=True)
-        log.error(f"command: {command}, command_code: {command.command_code}, command_name: {command.command_name}")
-        traceback.print_exc()
+def normalise_config_schema(config) -> Tuple[str, dict]:
+    """Convert a HA config dict into the client library's own format."""
+
+    serial_port = config[CONFIG].pop(SERIAL_PORT, None)
+
+    if config[CONFIG].get(PACKET_LOG):
+        if not isinstance(config[CONFIG][PACKET_LOG], dict):
+            config[CONFIG][PACKET_LOG] = PACKET_LOG_SCHEMA(
+                {LOG_FILE_NAME: config[CONFIG][PACKET_LOG]}
+            )
+    else:
+        config[CONFIG][PACKET_LOG] = {}
+
+    return serial_port, config
 
 
 def initialise_sys(kwargs):
@@ -755,7 +644,7 @@ def initialise_sys(kwargs):
         if COM_PORT: # override with the one in the main config file
             lib_kwargs[CONFIG][SERIAL_PORT] = COM_PORT
     else:        
-        # evohome_rf schema file not found. Build a skeleton schema from evogateway config file
+        # ramses_rf schema file not found. Build a skeleton schema from evogateway config file
         schema = {"config": { "disable_sending": False, "disable_discovery": False,"enforce_allowlist": None,"enforce_blocklist": None,
                 "evofw_flag": None, "max_zones": 12, "packet_log": PACKET_LOG_FILE,"serial_port": COM_PORT, "use_names": True, "use_schema": True},
                 "schema" : { "controller": CONTROLLER_ID}}
@@ -771,7 +660,9 @@ def initialise_sys(kwargs):
         log.debug(f"Auto generated config schema: {json.dumps(lib_kwargs)}")
 
     lib_kwargs[CONFIG][DISABLE_SENDING] = GATEWAY_DISABLE_SENDING
-
+    log.info(f"# evogateway {VERSION}")
+    print_formatted_row('',  text=f"# evogateway {VERSION}")
+    
     return lib_kwargs
     
 
@@ -780,7 +671,9 @@ async def main(**kwargs):
     lib_kwargs = initialise_sys(kwargs)
     
     global GWY
-    GWY = Gateway(lib_kwargs[CONFIG].pop(SERIAL_PORT, COM_PORT), **lib_kwargs)
+    serial_port, lib_kwargs = normalise_config_schema(lib_kwargs)
+    GWY = Gateway(serial_port, **lib_kwargs)
+    # GWY = Gateway(lib_kwargs[CONFIG].pop(SERIAL_PORT, COM_PORT), **lib_kwargs)
     protocol, _ = GWY.create_client(process_gwy_message)    
     mqtt_publish_schema()
     
@@ -799,8 +692,9 @@ async def main(**kwargs):
     except EvohomeError as err:
         msg = f" - ended via: EvohomeError: {err}"
     else:  # if no Exceptions raised, e.g. EOF when parsing
-        msg = " - ended without error (e.g. EOF)"
+        msg = " - ended without error (e.g. EOF)"    
     
+    print(msg)
     MQTT_CLIENT.loop_stop()
     
    
