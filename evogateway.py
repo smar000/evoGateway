@@ -114,15 +114,11 @@ MAX_LOG_HISTORY   = config.get("SENDER", "MAX_LOG_HISTORY", fallback=3)
 MIN_ROW_LENGTH    = config.get("MISC", "MIN_ROW_LENGTH", fallback=160)
 
 
-EMPTY_DEVICE_ID   = "--:------"
-
 SYS_CONFIG_COMMAND = "sys_config"
-# RESET_COM_PORTS   = "reset_com_ports"
-# CANCEL_SEND_COMMANDS ="cancel_commands"
-
 SYSTEM_MSG_TAG = "*"
-
-CONTROLLER_MODES = {0: "Auto", 1: "Heating Off", 2: "Eco-Auto", 3: "Away", 4: "Day Off", 7:"Custom"} # 0=auto, 1= off, 2=eco, 4 = day off, 7 = custom
+SEND_STATUS_TRANSMITTED  = "Transmitted"
+SEND_STATUS_FAILED       = "Failed"
+SEND_STATUS_SUCCESS      = "Successful"
 
 
 # -----------------------------------
@@ -130,6 +126,7 @@ DEVICES = {}
 ZONES = {}
 MQTT_CLIENT = None
 GWY = None
+LAST_SEND_MSG = None
 # -----------------------------------
 
 log = logging.getLogger(f"evogateway_log")
@@ -347,7 +344,7 @@ def process_gwy_message(msg) -> None:
                 zone_id = get_msg_target_zone_id(item)
                 display_simple_msg(msg, item, zone_id, "")
                 log.debug(f"        -> process_gwy_message: 1. type(item): {type(item)}, item: {item} ")
-            mqtt_publish(msg, item)
+            mqtt_publish_msg(msg, item)
 
         except Exception as e:
             log.error(f"Exception occured: {e}", exc_info=True)            
@@ -408,9 +405,21 @@ def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", st
     print(f"{Style.RESET_ALL}{style_prefix}{row.strip()}{Style.RESET_ALL}")
     
 
-def send_command_callback(msg) -> None:
-    print(f"=================> send_command_callback: {msg}")
-
+def send_command_callback(msg) -> None:    
+    status=SEND_STATUS_SUCCESS if msg else SEND_STATUS_FAILED
+    mqtt_publish_send_status(None, status)    
+    if msg:
+        # print(f"code_name: {msg.code_name}, code: {msg.code}, is_expired: {msg.is_expired}")
+        print_formatted_row(THIS_GATEWAY_NAME, text=f"COMMAND SEND SUCCESS: '{msg.code_name}'", style_prefix=f"{Fore.GREEN}")        
+    else:   
+        if "code" in LAST_SEND_MSG:
+            cmd = LAST_SEND_MSG["code"]
+        elif "command" in LAST_SEND_MSG:
+            cmd = LAST_SEND_MSG["command"]
+        else:
+            cmd = "UNKNOWN"
+        print_formatted_row(THIS_GATEWAY_NAME, text=f"COMMAND SEND FAILED for '{LAST_SEND_MSG}'", style_prefix=f"{Fore.GREEN}")        
+        
 
 
 def mqtt_initialise():
@@ -441,7 +450,7 @@ def mqtt_on_message(client, _, msg):
     mqtt_process_msg(payload)
 
 
-def mqtt_publish(msg, payload):
+def mqtt_publish_msg(msg, payload):
     """ We explicitly receive the payload instead of just using msg.payload, so that any pre-processing of the payload is assumed to be already done
         Payloads are assumed to always be dict
     """
@@ -454,7 +463,7 @@ def mqtt_publish(msg, payload):
         return
 
     if not isinstance(payload, dict):
-        log.error(f"Payload in mqtt_publish is not of type dict. type(payload): {type(payload)}, payload arg: {payload}, msg.payload: {msg.payload}")
+        log.error(f"Payload in mqtt_publish_msg is not of type dict. type(payload): {type(payload)}, payload arg: {payload}, msg.payload: {msg.payload}")
 
     try:
         target_zone_id = get_msg_target_zone_id(payload)        
@@ -480,21 +489,21 @@ def mqtt_publish(msg, payload):
             if updated_payload and not isinstance(updated_payload, list):
                 updated_payload = [updated_payload]
 
-            log.debug(f"        -> mqtt_publish: 0. updated_payload: {updated_payload}, type(updated_payload): {type(updated_payload)}, new_key: {new_key}")
-            log.debug(f"        -> mqtt_publish:    payload: {payload}")
+            log.debug(f"        -> mqtt_publish_msg: 0. updated_payload: {updated_payload}, type(updated_payload): {type(updated_payload)}, new_key: {new_key}")
+            log.debug(f"        -> mqtt_publish_msg:    payload: {payload}")
             
             # Iterate through the list. payload_item should be a dict as updated_payload should now be a list of dict [{...}]
             for payload_item in updated_payload:                
-                log.debug(f"        -> mqtt_publish: 1. payload_item: {payload_item}, type: {type(payload_item)}")
-                log.debug(f"        -> mqtt_publish:    updated_payload: {updated_payload}")
+                log.debug(f"        -> mqtt_publish_msg: 1. payload_item: {payload_item}, type: {type(payload_item)}")
+                log.debug(f"        -> mqtt_publish_msg:    updated_payload: {updated_payload}")
                 try:
                     if isinstance(payload_item, dict): # we may have a further dict in the updated_payload - e.g. opentherm msg, system_fault etc
                         for k in payload_item:
                             MQTT_CLIENT.publish(f"{subtopic}/{to_snake(k)}", str(payload_item[k]), 0, True)                
-                            log.debug(f"        -> mqtt_publish: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
+                            log.debug(f"        -> mqtt_publish_msg: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
                     else:
                         MQTT_CLIENT.publish(subtopic, str(payload_item), 0, True)        
-                        log.info(f"        -> mqtt_publish: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
+                        log.info(f"        -> mqtt_publish_msg: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
                 except Exception as e:
                     log.error(f"Exception occured: {e}", exc_info=True)
                     log.error(f"------------> payload_item: \"{payload_item}\", type(payload_item): \"{type(payload_item)}\", updated_payload: \"{updated_payload}\"")
@@ -512,6 +521,21 @@ def mqtt_publish(msg, payload):
         
         traceback.print_exc()
         pass
+
+
+def mqtt_publish_send_status(cmd, status):
+    if not cmd and not status:
+        log.error("mqtt_publish_send_status: Both 'cmd' and 'status' cannot be None")
+        return
+
+    topic = f"{MQTT_SUB_TOPIC}/_last_command"
+    timestamp = datetime.datetime.utcnow().strftime("%Y-%m-%dT%XZ")        
+    if cmd:
+        MQTT_CLIENT.publish(f"{topic}/command", cmd, 0, True)
+        MQTT_CLIENT.publish(f"{topic}/command_ts", timestamp, 0, True)
+    
+    MQTT_CLIENT.publish(f"{topic}/status", status, 0, True)
+    MQTT_CLIENT.publish(f"{topic}/status_ts", timestamp, 0, True)
 
 
 def mqtt_publish_schema():
@@ -576,14 +600,17 @@ def mqtt_process_msg(msg):
             # resp = asyncio.run(GWY.async_send_cmd(gw_cmd, **kwargs))
             # print(f"=============> async resp: {resp}")
 
+            global LAST_SEND_MSG
+            LAST_SEND_MSG = json_data
             log.debug(f"Sending command: {gw_cmd}")        
             GWY.send_cmd(gw_cmd, callback=send_command_callback)
+            mqtt_publish_send_status(msg, SEND_STATUS_TRANSMITTED)
 
     except TimeoutError:
         log.warning(f"Command '{gw_cmd if gw_cmd else msg}' failed due to time out")
 
     except Exception as ex:
-        log.error(f"Error in sending command '{command_name}': {ex}")                      
+        log.error(f"Error in sending command '{msg}': {ex}")                      
         print(traceback.format_exc())
     
 
@@ -618,9 +645,6 @@ def initialise_sys(kwargs):
     
     # Add this server/gateway as a device, but using dummy zone ID for now
     DEVICES[THIS_GATEWAY_ID] = { "name" : THIS_GATEWAY_NAME, "zoneId": -1, "zoneMaster": True }
-
-    send_queue = []
-    send_queue_size_displayed = 0         # Used to track if we've shown the queue size recently or not
 
     for d in DEVICES:
         if DEVICES[d]['zoneMaster']:
