@@ -6,5 +6,5 @@ old_*
 *.pyc
 *.cfg
 *.json
-
+*.json.*
 

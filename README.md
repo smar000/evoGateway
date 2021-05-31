@@ -2,6 +2,18 @@
 
 ## WIP - Migration of decoding/encoding/transmitting to ramses_rf library
 
+***27 Mar 2021 Update***  
+If the `devices.json` file is not present, evoGateway will generate an initial one using the ramses_rf 'eavsdrop' mode. This in essence listens in on the various radio communications, and builds up a schema of the evohome devices currently communicating on the radio network. It is best to leave the script running for a period of time to ensure that all devices are captured. Any zone names picked up will also be prefixed to the device name in the `devices.json` file. This file can be manually edited, as long as the format and structure remains the same (e.g. to change the device names to more meaningful values).
+
+*Note* that zone Ids used by the evoGateway (and ramses_rf framework) are *zero-based*, i.e. the first zone has a zoneId of 00, the twelfth zone has a zoneId of 11 etc.
+
+Although ramses_rf has its own schema file for configuration, this is not required to be created manually. evoGateway will generate its own `ramsesrf_schema.json` file if one is not present, and use it on subsequent restarts. Whilst rameses_rf recommends the use an `allow_list`, to that received messages are only accepted from the devices in this list, this does not have to be manually specified. evoGateway will dynamically create an `allow_list`  from the devices given in the `devices.json` file.
+
+Eavesdrop mode can be forced by by setting the parameter `SCHEMA_EAVESDROP = True` in the config file. This will generate both a new ramses schema file and evogateway devices.json file. 
+
+Schema, parameters and current devices can be published to MQTT by sending `{"sys_config" : "POST_SCHEMA"}`, otherwise these are posted on startup/shutdown of evoGateway. In addition, a save of the schema file/devices file can be forced at any time by sending the command `{"sys_config" : "SAVE_SCHEMA"}`.
+
+
 ***20 Mar 2021 Update***  
 - Updated to use the latest `ramses_rf` library (previously called to `evohome_rf`)
 - Added support for ramses_rf built in send command constructors
