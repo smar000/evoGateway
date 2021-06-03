@@ -4,4 +4,7 @@
 bak_*
 old_*
 *.pyc
+*.cfg
+*.json
+*.json.*
 
