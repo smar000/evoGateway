@@ -71,7 +71,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.0_alpha9"
+VERSION         = "3.0.0"
 
 
 CONFIG_FILE     = "evogateway.cfg"
@@ -113,6 +113,8 @@ GATEWAY_DISABLE_SENDING = config.getboolean("MISC", "DISABLE_SENDING", fallback=
 
 DISPLAY_FULL_JSON       = config.getboolean("MISC", "DISPLAY_FULL_JSON", fallback=False)
 SCHEMA_EAVESDROP        = config.getboolean("Misc", "SCHEMA_EAVESDROP", fallback=False)
+FORCE_SINGLE_HGI        = config.getboolean("Misc", "FORCE_SINGLE_HGI", fallback=True)
+DHW_ZONE_PREFIX         = config.get("Misc", "DHW_ZONE_PREFIX", fallback="_dhw")
 
 MIN_ROW_LENGTH          = config.get("MISC", "MIN_ROW_LENGTH", fallback=160)
 
@@ -140,7 +142,7 @@ formatter = logging.Formatter('%(asctime)s [%(lineno)s] %(message)s')
 # %(funcName)20s() [%(levelname)s]
 
 # Log file handler
-file_handler = RotatingFileHandler(EVENTS_FILE, maxBytes=1000000, backupCount=MAX_LOG_HISTORY)
+file_handler = RotatingFileHandler(EVENTS_FILE, maxBytes=1000000, backupCount=LOG_FILE_ROTATE_COUNT)
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
 log.addHandler(file_handler)
@@ -156,18 +158,15 @@ log.addHandler(console_handler)
 _first_cap_re = re.compile('(.)([A-Z][a-z]+)')
 _all_cap_re = re.compile('([a-z0-9])([A-Z])')
 def to_snake(name):
-  name=name.strip().replace("'","").replace(" ","_")
-  s1 = _first_cap_re.sub(r'\1_\2', name)
-  s2 = _all_cap_re.sub(r'\1_\2', s1).lower()
-  return s2.replace("__","_")
+    if name:
+        name=name.strip().replace("'","").replace(" ","_")
+        s1 = _first_cap_re.sub(r'\1_\2', name)
+        s2 = _all_cap_re.sub(r'\1_\2', s1).lower()
+        return s2.replace("__","_")
 
 
 def truncate_str(str, length):
     return (str[:length - 3] + '...') if len(str) > length else str
-
-
-def hex_to_int_str(hex_str):
-    return str(int(hex_str, 16))
 
 
 def _proc_kwargs(obj, kwargs) -> Tuple[dict, dict]:
@@ -177,9 +176,19 @@ def _proc_kwargs(obj, kwargs) -> Tuple[dict, dict]:
     return lib_kwargs, cli_kwargs
 
 
+def get_parent_keys(d, value):
+    for k,v in d.items():
+        if isinstance(v, dict):
+            p = get_parent_keys(v, value)
+            if p:
+                return [k] + p
+        elif v == value:
+            return [k]
+
+
 def get_device_name(device_address):
     try:
-        if device_address.id == HGI_DEVICE_ID:
+        if device_address.id == HGI_DEVICE_ID or (FORCE_SINGLE_HGI and device_address.type in "18"):
             name = THIS_GATEWAY_NAME
         elif device_address.type in "01":
             name = "Controller"
@@ -190,61 +199,46 @@ def get_device_name(device_address):
         if name == NON_DEVICE_ID: 
             name = ""
         dev_type = DEVICE_TABLE[device_address.type]["type"].replace("---", "").replace("NUL", "")
-        name = "{} {}".format(dev_type, name).strip()
+        name = "{} {}".format(dev_type, name).strip() 
         return name
 
     except Exception as ex:
-        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured: {ex}", exc_info=True)
+        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured for device_address '{device_address}': {ex}", exc_info=True)
+        traceback.print_stack()
 
 
 def get_msg_zone_name(device_id, target_zone_id=None):
     """ Use any 'target' zone name given in the payload, otherwise fall back to zone name of the sending device"""    
+    
+    # If target of the message is a zone, use that 
+    if target_zone_id and int(target_zone_id, 16) >= 0:       
+        # zone = GWY.evo.zone_by_idx[target_zone_id] if GWY.evo else None
+        # zone_name = zone.name if zone else "_zone_{}".format(target_zone_id)
 
-    if target_zone_id and int(target_zone_id) > 0:
         if target_zone_id not in ZONES:
-            update_zones_from_gwy()        
-        # Target of the message is a zone, so use that 
+            update_zones_from_gwy()                
         zone_name = ZONES[target_zone_id] if target_zone_id in ZONES else "_zone_{}".format(target_zone_id)
+
     else:
-        src_zone_id = DEVICES[device_id]["zone_id"] if device_id in DEVICES else None
+        if not device_id in DEVICES:
+            update_devices_from_gwy()
+
+        src_zone_id = DEVICES[device_id]["zone_id"] if device_id in DEVICES and "zone_id" in DEVICES[device_id] else None
+        if src_zone_id and not isinstance(src_zone_id, str):
+            print(f"{Style.BRIGHT}{Fore.RED}[DEBUG] -----------> src_zone_id ({src_zone_id}) is not string: type = {type(src_zone_id)}. Device_id: {device_id}, target_zone_id: {target_zone_id}. {Style.RESET_ALL}")
+            traceback.print_stack()
+
         dev_type = device_id[:2]
         if dev_type in "01 02 10 18" or target_zone_id == "-1":
             zone_name = MQTT_ZONE_IND_TOPIC
-        elif (src_zone_id and int(src_zone_id) > 11) or dev_type in "13":
+        elif (src_zone_id and int(src_zone_id, 16) > 11) or dev_type in "13":
             zone_name = f"{MQTT_ZONE_IND_TOPIC}/relays"
-        elif src_zone_id and int(src_zone_id) >= 0 and src_zone_id in ZONES:            
+        elif src_zone_id and int(src_zone_id, 16) >= 0 and src_zone_id in ZONES:            
             zone_name = ZONES[src_zone_id] 
         else:
             zone_name = MQTT_ZONE_UNKNOWN
     return zone_name
 
-
-def ___OLD_get_target_zone_id(data):
-    """ Extract the zone ID for the subject of the msg, e.g when controller is sending msg the status of a zone etc
-        
-        Note:
-         - 'data' must be a dict
-         - zone Ids are zero based in keeping with ramses_rf
-    """
-
-    
-    zone_id = -1
-    if "ufh_idx" in str(data):
-        log.debug(f"        ->1. Found ufh_idx in data: {data}")
-
-    if isinstance(data, dict) or isinstance(data, list):
-        if "ufh_idx" in data:
-            # message arrives with UFH sub-zone Id. We need to get corresponding normal evohome zone ID.
-            zone_ids = [DEVICES[d]["zone_id"] for d in DEVICES if "ufh_zone_id" in DEVICES[d] and DEVICES[d]["ufh_zone_id"] == int(data["ufh_idx"])]
-            log.debug(f"        -> 2. Processed ufh_idx : data[ufh_idx]: {data['ufh_idx']}; zone_ids: {zone_ids}")
-            zone_id = zone_ids[0] if len(zone_ids) > 0 else -1
-        elif "zone_idx" in data:
-            zone_id = hex_to_int_str(data["zone_idx"]) if "zone_idx" in data else -1
-    else:
-        raise TypeError(f"argument must be a dict but instead a {type(data)} was sent with value: {data}")
-
-    return zone_id
-        
 
 def get_opentherm_msg(msg):
     if msg.code_name == "opentherm_msg":       
@@ -255,16 +249,6 @@ def get_opentherm_msg(msg):
             return key, {key: msg.payload}
     else:
         log.error(f"Invalid opentherm_msg. msg.code_name: {msg.code_name}")
-    return None, None
-
-
-def get_system_fault_msg(msg):
-    if msg.code_name == "system_fault":       
-        name = msg.payload.get("log_idx", None)
-        if name:
-            return name, {name: msg.payload}
-    else:
-        log.error(f"Not a system_fault msg. msg.code_name: {msg.code_name}")
     return None, None
 
 
@@ -333,9 +317,9 @@ def process_gwy_message(msg) -> None:
                 # Convert to a dict...
                 item = {msg.code_name: str(item) }
             if not DISPLAY_FULL_JSON: 
-                zone_id = hex_to_int_str(item["zone_idx"]) if "zone_idx" in item else -1
+                zone_id = item["zone_idx"] if "zone_idx" in item else None
                 display_simple_msg(msg, item, zone_id, "")
-            mqtt_publish_msg(msg, item)
+            mqtt_publish_received_msg(msg, item)
 
         except Exception as e:
             log.error(f"Exception occured: {e}", exc_info=True)            
@@ -377,7 +361,7 @@ def display_full_msg(msg):
         print(f"{Style.RESET_ALL}{dtm} {msg}"[:CONSOLE_COLS])
 
 
-def display_simple_msg(msg, payload_dict, target_zone=-1, suffix_text=""):    
+def display_simple_msg(msg, payload_dict, target_zone_id, suffix_text=""):    
     src = get_device_name(msg.src)
     dst = get_device_name(msg.dst) if msg.src.id != msg.dst.id else ""
 
@@ -385,12 +369,8 @@ def display_simple_msg(msg, payload_dict, target_zone=-1, suffix_text=""):
     display_text = payload_dict.copy() if isinstance(payload_dict, dict) else payload_dict 
     filtered_text = cleanup_display_text(msg, display_text)
     try:        
-        zone_name = "@ {:<20}".format(truncate_str(ZONES[target_zone], 20)) if int(target_zone) > 0 and target_zone in ZONES else ""
-        zone_id = "[Zone {:<3}]".format(target_zone) if int(target_zone) > 0 else ""
-
-        # display_row = f"{msg.verb.strip():<2}| {src:<22} -> {dst:<22} | {filtered_text} {zone_name:<25} {zone_id} {suffix_text}{Style.RESET_ALL} "
-        # display_row = f"{msg.verb.strip():<2}| {src:<22} -> {dst:<22} | {filtered_text} {zone_name:<30} {zone_id} {suffix_text}{Style.RESET_ALL} "
-        # display_row = display_row.replace('\n', ' ').replace('\r', '') # carriage returns appear to slip in for some messages
+        zone_name = "@ {:<20}".format(truncate_str(ZONES[target_zone_id], 20)) if target_zone_id and int(target_zone_id, 16) >= 0 and target_zone_id in ZONES else ""
+        zone_id = "[Zone {:<3}]".format(target_zone_id) if target_zone_id and int(target_zone_id, 16) >= 0 else ""
 
         if msg.src.type == "18":
             style_prefix = f"{Style.BRIGHT}{Fore.MAGENTA}"
@@ -406,8 +386,9 @@ def display_simple_msg(msg, payload_dict, target_zone=-1, suffix_text=""):
 
     except Exception as e:
         log.error(f"Exception occured: {e}", exc_info=True)
+        log.error(f"msg: {msg}, payload_dict: {payload_dict}, target_zone_id: {target_zone_id}, suffix_text: {suffix_text}")
         log.error(f"type(display_text): {type(display_text)}")
-        log.error(f"Display row: {msg.verb}| {src} -> {dst} | {display_text} {zone_name} [Zone {target_zone}] {suffix_text}")
+        # log.error(f"Display row: {msg.verb}| {src} -> {dst} | {display_text} {zone_name} [Zone {target_zone_id}] {suffix_text}")
 
 
 def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", style_prefix=""):
@@ -421,11 +402,13 @@ def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", st
     
 
 def send_command_callback(msg) -> None:    
+    # Callback receives msg object on success, and False on failure
     status=SEND_STATUS_SUCCESS if msg else SEND_STATUS_FAILED
     mqtt_publish_send_status(None, status)    
+    
     if msg:
         # print(f"code_name: {msg.code_name}, code: {msg.code}, is_expired: {msg.is_expired}")
-        print_formatted_row(THIS_GATEWAY_NAME, text=f"COMMAND SEND SUCCESS: '{msg.code_name}'", style_prefix=f"{Fore.GREEN}")        
+        display_text = f"COMMAND SEND SUCCESS: '{msg.code_name}'"        
     else:   
         if "code" in LAST_SEND_MSG:
             cmd = LAST_SEND_MSG["code"]
@@ -433,38 +416,11 @@ def send_command_callback(msg) -> None:
             cmd = LAST_SEND_MSG["command"]
         else:
             cmd = "UNKNOWN"
-        print_formatted_row(THIS_GATEWAY_NAME, text=f"COMMAND SEND FAILED for '{LAST_SEND_MSG}'", style_prefix=f"{Fore.GREEN}")        
-        
+        display_text = f"COMMAND SEND FAILED for '{LAST_SEND_MSG}'"
 
-def save_json_to_file(file_content, file_name):
-    try:
-        if os.path.isfile(file_name):        
-            # If we are already at max count. Delete .1, and take away 1 from all others.        
-            if os.path.isfile(f"{file_name}.{MAX_SAVE_FILE_COUNT}"):                    
-                # Remove any files with extension over and above MAX_SAVE_FILE_COUNT
-                files = glob.glob(f"{file_name}.*")
-                for f in files:
-                    ext = f.split(".")[-1]
-                    if ext.isnumeric():
-                        if int(ext) > MAX_SAVE_FILE_COUNT:
-                            os.remove(f)
-                if os.path.isfile(f"{file_name}.1"):        
-                    os.remove(f"{file_name}.1")                
-                for j in range(2, MAX_SAVE_FILE_COUNT + 1):
-                    if os.path.isfile(f"{file_name}.{j}"):
-                        os.rename(f"{file_name}.{j}", f"{file_name}.{j-1}")
-            i = 1
-            while os.path.exists(f"{file_name}.{i}"):
-                i += 1        
-            os.rename(file_name, f"{file_name}.{i}")
+    print_formatted_row(THIS_GATEWAY_NAME, text=display_text, style_prefix=f"{Fore.GREEN}")     
+    log.info(display_text)
 
-        with open(file_name,'w') as fp:
-            fp.write(json.dumps(file_content, sort_keys=True, indent=4))
-        fp.close()
-    except Exception as e:
-        log.error(f"Exception occured saving file '{file_name}': {e}", exc_info=True)
-        log.error(f"{json.dumps(file_content)}")
-    
 
 def save_schema_and_devices():
     if not GWY:
@@ -480,10 +436,11 @@ def save_schema_and_devices():
         update_devices_from_gwy()        
 
         if DEVICES:
-            save_json_to_file(DEVICES, DEVICES_FILE)
+            devices_simple = {k : {"name" : DEVICES[k]["name"]} for k in DEVICES}
+            save_json_to_file(devices_simple, DEVICES_FILE)
         
         if ZONES:
-            save_json_to_file(ZONES, ZONES_FILE)
+            save_json_to_file(ZONES, ZONES_FILE, False)
         
         print(f"Updated '{DEVICES_FILE}' and ramses_rf schema files generated")
     except Exception as e:
@@ -494,7 +451,7 @@ def save_schema_and_devices():
 def save_zones():
     update_zones_from_gwy()
     if ZONES:
-        save_json_to_file(ZONES, ZONES_FILE)
+        save_json_to_file(ZONES, ZONES_FILE, False)
 
 
 def update_devices_from_gwy(ignore_unnamed_zones=False):
@@ -506,36 +463,44 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
 
     controller_id = GWY.evo.id if GWY and GWY.evo else (GWY.schema["controller"] if "controller" in GWY.schema else None)   
     if not controller_id is None and not controller_id in DEVICES:
-        DEVICES[controller_id] = {"name": f"Controller", "zone_id": -1, "zone_temp_sensor" : False}
+        DEVICES[controller_id] = {"name": f"Controller"}
+
+    if "system" in schema and schema["system"] and "heating_control" in schema["system"]:
+        device_id = schema["system"]["heating_control"]
+        DEVICES[device_id] = {"name": get_device_type_and_id(device_id)}
 
     if "zones" in schema:
         for zone_id, zone_items in schema["zones"].items():            
             if "devices" in zone_items:
-                if hex_to_int_str(zone_id) in ZONES:
-                    zone_name = ZONES[hex_to_int_str(zone_id)]
+                if zone_id in ZONES:
+                    zone_name = ZONES[zone_id]
                 elif not ignore_unnamed_zones:
-                    zone_name = f"Zone_{hex_to_int_str(zone_id)}" 
+                    zone_name = f"Zone_{zone_id}" 
                 else:
                     zone_name = None                    
 
-                for device_id in zone_items["devices"]:                    
-                    DEVICES[device_id] = {"name": f"{zone_name} {get_device_type_and_id(device_id)}", 
-                                            "zone_id": hex_to_int_str(zone_id), "zone_temp_sensor" : True if device_id == zone_items["sensor"] else False}
+                for device_id in zone_items["devices"]:      
+                    if device_id in DEVICES and "name" in DEVICES[device_id]:
+                        org_name = DEVICES[device_id]["name"]
+                    else:
+                        org_name = None
+                    DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", 
+                                            "zone_id": zone_id}
 
     if "stored_hotwater" in schema:
         for dhw_device_type in schema["stored_hotwater"]:
             device_id = schema["stored_hotwater"][dhw_device_type]            
             if device_id:
-                DEVICES[device_id] = {"name": dhw_device_type.replace("_"," ").title(), "zone_id": -1, "zone_temp_sensor" : "hotwater_sensor" in dhw_device_type}
+                DEVICES[device_id] = {"name": dhw_device_type.replace("_"," ").title()}
     
     if "underfloor_heating" in schema:
         ufc_ids = list(schema["underfloor_heating"].keys())
         for ufc_id in ufc_ids:
-            DEVICES[ufc_id] = {"name": f"UFH Controller {get_device_type_and_id(ufc_id)}", "zone_id": -1, "zone_temp_sensor" : False}              
+            DEVICES[ufc_id] = {"name": f"UFH Controller {get_device_type_and_id(ufc_id)}"}              
         
     if "orphans" in schema and schema["orphans"]:
         for device_id in schema["orphans"]:
-            DEVICES[device_id] = {"name": get_device_type_and_id(device_id), "zone_id": -1, "zone_temp_sensor" : False}
+            DEVICES[device_id] = {"name": get_device_type_and_id(device_id)}
 
     mqtt_publish_schema()
 
@@ -559,7 +524,7 @@ def update_zones_from_gwy():
     if "zones" in schema:
         for zone_id in schema["zones"]:            
             if "name" in params["zones"][zone_id] and params["zones"][zone_id]["name"]:
-                ZONES[hex_to_int_str(zone_id)] = params["zones"][zone_id]["name"]
+                ZONES[zone_id] = params["zones"][zone_id]["name"]
 
     if "underfloor_heating" in schema:
         ufc_ids = list(schema["underfloor_heating"].keys())
@@ -573,10 +538,13 @@ def update_zones_from_gwy():
 
 
 def get_device_type_and_id(device_id):
-    id_parts = device_id.split(":")
-    dev_type = DEVICE_TABLE[id_parts[0]]["type"]
-    return f"{dev_type}:{id_parts[1]}"
-
+    if ":" in device_id and len(device_id) == 9:
+        id_parts = device_id.split(":")
+        dev_type = DEVICE_TABLE[id_parts[0]]["type"]
+        return f"{dev_type}:{id_parts[1]}"
+    else:
+        print(f"{Style.BRIGHT}{Fore.RED}Invalid device_id: {device_id}{Style.RESET_ALL}")
+        traceback.print_stack()
 
 def mqtt_initialise():
     if not MQTT_SERVER:
@@ -603,10 +571,11 @@ def mqtt_on_connect(client, *_):
 def mqtt_on_message(client, _, msg):
     payload = str(msg.payload.decode("utf-8"))
     print_formatted_row("MQTT", text=f"Received MQTT message: {payload}", style_prefix=f"{Fore.GREEN}")        
+    log.info(f"MQTT message received: {payload}")  
     mqtt_process_msg(payload)
 
 
-def mqtt_publish_msg(msg, payload):
+def mqtt_publish_received_msg(msg, payload):
     """ We explicitly receive the payload instead of just using msg.payload, so that any pre-processing of the payload is assumed to be already done
         Payloads are assumed to always be dict
     """
@@ -620,28 +589,33 @@ def mqtt_publish_msg(msg, payload):
         return
 
     if not isinstance(payload, dict):
-        log.error(f"Payload in mqtt_publish_msg is not of type dict. type(payload): {type(payload)}, payload arg: {payload}, msg.payload: {msg.payload}")
+        log.error(f"Payload in mqtt_publish_received_msg is not of type dict. type(payload): {type(payload)}, payload arg: {payload}, msg.payload: {msg.payload}")
 
     try:
         target_zone_id = None
         if "parent_idx" in payload:
-            target_zone_id = hex_to_int_str(payload["parent_idx"])    
+            target_zone_id = payload["parent_idx"]
         elif "zone_idx" in payload:
-            target_zone_id = hex_to_int_str(payload["zone_idx"]) 
+            target_zone_id = payload["zone_idx"]
         elif "ufh_idx" in str(payload):
             if not UFH_CIRCUITS: # May just need an update
                 update_zones_from_gwy()
             if UFH_CIRCUITS and payload["ufh_idx"] in UFH_CIRCUITS:
-                target_zone_id = hex_to_int_str(UFH_CIRCUITS[payload["ufh_idx"]]["zone_idx"])        
+                target_zone_id = UFH_CIRCUITS[payload["ufh_idx"]]["zone_idx"]        
+            
 
         if msg.src.id not in DEVICES: # Refresh zones/devices list
             update_zones_from_gwy()
-            update_devices_from_gwy()
-            
-            
-        src_zone_id = DEVICES[msg.src.id]['zone_id'] if msg.src.id in DEVICES else None
+            update_devices_from_gwy()           
+        
+        if hasattr(msg.src, "zone") and msg.src.zone:      
+            src_zone_id = msg.src.zone.idx
+        elif hasattr(msg.src, "_domain_id") and msg.src._domain_id and int(msg.src._domain_id, 16) >= 0:        
+            src_zone_id = msg.src._domain_id
+        else:
+            src_zone_id = None
 
-        if (target_zone_id and int(target_zone_id) >=0 and int(target_zone_id) <12) or (src_zone_id and int(src_zone_id) <=0 and int(src_zone_id) <12):
+        if (target_zone_id and 0 <= int(target_zone_id, 16) < 12) or (src_zone_id and 0 <= int(src_zone_id, 16) < 12):
             if MQTT_GROUP_BY_ZONE and MQTT_REQUIRE_ZONE_NAMES and (not ZONES or (target_zone_id not in ZONES and src_zone_id not in ZONES)):
                 # MQTT topic requires zone name...
                 update_zones_from_gwy()
@@ -650,11 +624,34 @@ def mqtt_publish_msg(msg, payload):
 
         src_zone = to_snake(get_msg_zone_name(msg.src.id, target_zone_id)) #if not target_zone_id or target_zone_id <1 else get_device_zone_name(target_zone_id)
         src_device = to_snake(get_device_name(msg.src))
+
+        if ("dhw_" in msg.code_name or "dhw_" in src_device) and DHW_ZONE_PREFIX:
+            # treat DHW as a zone if we are grouping by zone, otherwise as a device prefix
+            if MQTT_GROUP_BY_ZONE:
+                src_zone = f"{DHW_ZONE_PREFIX}" 
+            else:
+                src_device = f"{DHW_ZONE_PREFIX}/{src_device}" 
         
-        if MQTT_GROUP_BY_ZONE and src_zone:
-            topic_base = f"{MQTT_PUB_TOPIC}/{src_zone}/{src_device}/{msg.code_name}"
+        if "until" in payload and " " in payload["until"]:
+            # Patch with T separator
+            try:            
+                d, t = payload["until"].split(" ")
+                payload["until"] = f"{d}T{t}"
+            except Exception as ex:
+                log.error(f"Exception occured in patching 'until' value '{payload['until']}': {ex}", exc_info=True)
+
+        # Need separate topics for certain payloads under CTL or HGI, such as fault log entries
+        if "log_idx" in payload:
+            topic_idx = f"/{payload['log_idx']}"             
+        elif src_zone == MQTT_ZONE_IND_TOPIC and (src_device.startswith("hgi_") or src_device.startswith("ctl_")) and "zone_idx" in payload:
+            topic_idx = f"/{payload['zone_idx']}"             
         else:
-            topic_base = f"{MQTT_PUB_TOPIC}/{src_device}/{msg.code_name}"
+             topic_idx = ""
+            
+        if MQTT_GROUP_BY_ZONE and src_zone:
+            topic_base = f"{MQTT_PUB_TOPIC}/{src_zone}/{src_device}/{msg.code_name}{topic_idx}"
+        else:
+            topic_base = f"{MQTT_PUB_TOPIC}/{src_device}/{msg.code_name}{topic_idx}"
         
         subtopic = topic_base        
         if not MQTT_PUB_AS_JSON:
@@ -670,22 +667,16 @@ def mqtt_publish_msg(msg, payload):
             if updated_payload and not isinstance(updated_payload, list):
                 updated_payload = [updated_payload]
 
-            log.debug(f"        -> mqtt_publish_msg: 0. updated_payload: {updated_payload}, type(updated_payload): {type(updated_payload)}, new_key: {new_key}")
-            log.debug(f"        -> mqtt_publish_msg:    payload: {payload}")
-            
             # Iterate through the list. payload_item should be a dict as updated_payload should now be a list of dict [{...}]
             for payload_item in updated_payload:                
-                log.debug(f"        -> mqtt_publish_msg: 1. payload_item: {payload_item}, type: {type(payload_item)}")
-                log.debug(f"        -> mqtt_publish_msg:    updated_payload: {updated_payload}")
-
                 try:
                     if isinstance(payload_item, dict): # we may have a further dict in the updated_payload - e.g. opentherm msg, system_fault etc
                         for k in payload_item:
                             MQTT_CLIENT.publish(f"{subtopic}/{to_snake(k)}", str(payload_item[k]), 0, True)                
-                            log.debug(f"        -> mqtt_publish_msg: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
+                            log.debug(f"        -> mqtt_publish_received_msg: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
                     else:
                         MQTT_CLIENT.publish(subtopic, str(payload_item), 0, True)        
-                        log.info(f"        -> mqtt_publish_msg: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
+                        log.info(f"        -> mqtt_publish_received_msg: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
                 except Exception as e:
                     log.error(f"Exception occured: {e}", exc_info=True)
                     log.error(f"------------> payload_item: \"{payload_item}\", type(payload_item): \"{type(payload_item)}\", updated_payload: \"{updated_payload}\"")
@@ -740,7 +731,6 @@ def mqtt_publish_schema():
 
 def mqtt_process_msg(msg):
     log.debug(f"MQTT message received: {msg}")
-
     
     try:
         json_data = json.loads(msg)        
@@ -831,6 +821,38 @@ def normalise_config_schema(config) -> Tuple[str, dict]:
     return serial_port, config
 
 
+def save_json_to_file(file_content, file_name, sorted=True):
+    try:
+        if os.path.isfile(file_name):        
+            
+            if os.path.isfile(f"{file_name}.{MAX_SAVE_FILE_COUNT}"):                    
+                # Remove any files with extension over and above MAX_SAVE_FILE_COUNT
+                files = glob.glob(f"{file_name}.*")
+                for f in files:
+                    ext = f.split(".")[-1]
+                    if ext.isnumeric():     
+                        if int(ext) > MAX_SAVE_FILE_COUNT:
+                            os.remove(f)
+                if os.path.isfile(f"{file_name}.1"):        
+                    os.remove(f"{file_name}.1")                
+                for j in range(2, MAX_SAVE_FILE_COUNT + 1):
+                    if os.path.isfile(f"{file_name}.{j}"):
+                        os.rename(f"{file_name}.{j}", f"{file_name}.{j-1}")
+
+            # If we are already at max count. Delete .1, and take away 1 from all others.            
+            i = 1
+            while os.path.exists(f"{file_name}.{i}"):
+                i += 1        
+            os.rename(file_name, f"{file_name}.{i}")
+
+        with open(file_name,'w') as fp:
+            fp.write(json.dumps(file_content, sort_keys=sorted, indent=4))
+        fp.close()
+    except Exception as e:
+        log.error(f"Exception occured saving file '{file_name}': {e}", exc_info=True)
+        log.error(f"{json.dumps(file_content)}")
+    
+
 def load_json_from_file(file_path):
     items = {}
     try:
@@ -843,6 +865,8 @@ def load_json_from_file(file_path):
     return items
 
 
+
+
 def initialise_sys(kwargs):
 
     mqtt_initialise()
@@ -852,31 +876,10 @@ def initialise_sys(kwargs):
     global SCHEMA_EAVESDROP
     global SCHEMA_FILE
 
-    DEVICES = load_json_from_file(DEVICES_FILE)    
-    # Add this server/gateway as a device, but using dummy zone ID for now
-    DEVICES[HGI_DEVICE_ID] = { "name" : THIS_GATEWAY_NAME, "zone_id": -1, "zone_temp_sensor": True }    
-    SCHEMA_EAVESDROP = len(DEVICES) <= 1
-
-    if LOAD_ZONES_FROM_FILE:
-        ZONES = load_json_from_file(ZONES_FILE)
-        
-    print_formatted_row("", text="")
-    print_formatted_row("", text="------------------------------------------------------------------------------------------")
-    print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
-
-    for key in sorted(DEVICES):
-        dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
-        zm = " [Zone Temp Sensor]" if DEVICES[key]['zone_temp_sensor'] and int(DEVICES[key]["zone_id"]) >=0 else ""
-        zone_details = f"- Zone {DEVICES[key]['zone_id']:<3}{zm}" if int(DEVICES[key]['zone_id']) >= 0 and int(DEVICES[key]['zone_id']) <= 11 else ""
-        print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
-
-    print_formatted_row("", text="------------------------------------------------------------------------------------------")
-    print_formatted_row("", text="")
-
-    init_config = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: False, ENFORCE_ALLOWLIST: ALLOWLIST_ENABLED and not SCHEMA_EAVESDROP, ENFORCE_BLOCKLIST: True,
+    BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: False, ENFORCE_ALLOWLIST: ALLOWLIST_ENABLED and not SCHEMA_EAVESDROP, ENFORCE_BLOCKLIST: True,
         EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_NAMES: True, USE_SCHEMA: True}}
 
-    lib_kwargs, _ = _proc_kwargs((init_config, {}), kwargs)
+    lib_kwargs, _ = _proc_kwargs((BASIC_CONFIG, {}), kwargs)
 
     schema_loaded_from_file = False
     if not SCHEMA_EAVESDROP and SCHEMA_FILE is not None:
@@ -890,14 +893,6 @@ def initialise_sys(kwargs):
                 lib_kwargs[CONFIG][SERIAL_PORT] = COM_PORT
             log.debug(f"Schema loaded. Updated lib_kwargs: {lib_kwargs}")
             schema_loaded_from_file = True                
-
-            if not ALLOW_LIST in lib_kwargs and DEVICES:
-                # Create 'allow_list' from DEVICES
-                allow_list = {ALLOW_LIST: {}}
-                # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
-                for d in DEVICES:
-                    allow_list[ALLOW_LIST][d] = {"name" : DEVICES[d]["name"]}    
-                lib_kwargs.update(allow_list)
         else:
             log.warning(f"The schema file '{SCHEMA_FILE}' was not found'")
             SCHEMA_EAVESDROP = True
@@ -917,6 +912,39 @@ def initialise_sys(kwargs):
 
     lib_kwargs[CONFIG][ENABLE_EAVESDROP] = SCHEMA_EAVESDROP
     lib_kwargs[CONFIG][DISABLE_SENDING] = GATEWAY_DISABLE_SENDING
+
+    # Load local devices file if available. This forms the 'allow_list' and also allows for custom naming of devices 
+    DEVICES = load_json_from_file(DEVICES_FILE) 
+    
+    # Add this server/gateway as a known device 
+    DEVICES[HGI_DEVICE_ID] = { "name" : THIS_GATEWAY_NAME}    
+    SCHEMA_EAVESDROP = len(DEVICES) <= 1
+
+    if not SCHEMA_EAVESDROP and not ALLOW_LIST in lib_kwargs and DEVICES:
+        # Create 'allow_list' from DEVICES
+        allow_list = {ALLOW_LIST: {}}
+        # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
+        for d in DEVICES:
+            allow_list[ALLOW_LIST][d] = {"name" : DEVICES[d]["name"]}    
+        lib_kwargs.update(allow_list)
+
+    if LOAD_ZONES_FROM_FILE:
+        ZONES = load_json_from_file(ZONES_FILE)
+        
+    print_formatted_row("", text="")
+    print_formatted_row("", text="------------------------------------------------------------------------------------------")
+    print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
+
+    for key in sorted(DEVICES):
+        dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
+        zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
+        zone_id = zone_ids[0] if zone_ids else None
+        zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
+        print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
+
+    print_formatted_row("", text="------------------------------------------------------------------------------------------")
+    print_formatted_row("", text="")
+
     log.info(f"# evogateway {VERSION}")
     print_formatted_row('',  text=f"{Style.BRIGHT}{Fore.YELLOW}# evogateway {VERSION}")
 
@@ -940,14 +968,14 @@ async def main(**kwargs):
 
         await tasks
 
-    except asyncio.CancelledError:
-        msg = " - ended via: CancelledError (e.g. SIGINT)"
-    except GracefulExit:
-        msg = " - ended via: GracefulExit"
-    except KeyboardInterrupt:
-        msg = " - ended via: KeyboardInterrupt"
-    except EvohomeError as err:
-        msg = f" - ended via: EvohomeError: {err}"
+    # except asyncio.CancelledError:
+    #     msg = " - ended via: CancelledError (e.g. SIGINT)"
+    # except GracefulExit:
+    #     msg = " - ended via: GracefulExit"
+    # except KeyboardInterrupt:
+    #     msg = " - ended via: KeyboardInterrupt"
+    except Exception as ex:
+        msg = f" - ended via: Exception: {ex}"
     else:  # if no Exceptions raised, e.g. EOF when parsing
         msg = " - ended without error (e.g. EOF)"    
     
@@ -973,8 +1001,8 @@ if __name__ == "__main__":
 
     except asyncio.CancelledError:
         msg = " - ended via: CancelledError (e.g. SIGINT)"
-    except GracefulExit:
-        msg = " - ended via: GracefulExit"
+    # except GracefulExit:
+    #     msg = " - ended via: GracefulExit"
     except KeyboardInterrupt:
         msg = " - ended via: KeyboardInterrupt"
     except EvohomeError as err:
