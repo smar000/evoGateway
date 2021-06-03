@@ -1,0 +1,62 @@
+{
+    "config": {
+        "disable_sending": false,
+        "disable_discovery": true,
+        "enforce_allowlist": true,
+        "enforce_blocklist": null,
+        "evofw_flag": null,
+        "max_zones": 12,
+        "packet_log": null,
+        "reduce_processing": 0,
+        "serial_port": "/dev/evogateway",
+        "use_names": true,
+        "use_schema": true
+    },
+    "schema" : {
+        "controller": "01:139901",
+        "system": {
+            "heating_control": null,
+            "orphans": [
+                "04:227936",
+                "04:228104",
+                "07:033469"
+            ]
+        },
+        "stored_hotwater": {
+            "hotwater_sensor": "07:043555",
+            "hotwater_valve": "13:133904",
+            "heating_valve": "13:102710"
+        },
+        "zones": {
+            "00": {
+                "heating_type": "radiator_valve",
+                "sensor": "34:015243",
+                "devices": [
+                    "04:228044",
+                    "04:143928",
+                    "04:143926",
+                    "04:143922"
+                ]
+            },
+            "01": {
+                "heating_type": "radiator_valve",
+                "sensor": "04:143924",
+                "devices": [
+                    "04:227952"
+                ]
+            },
+            ....
+            "0B": {
+                "heating_type": "underfloor_heating",
+                "sensor": "34:214769",
+                "devices": []
+            }
+        }
+    },
+    "allowlist": {
+        "01:139901": { "name" : "Dining Room"},
+        "02:043392": { "name" : "Controller"}, 
+        .....        
+        "34:231315": { "name" : "Garage"}
+    }
+}
