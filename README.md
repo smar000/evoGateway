@@ -84,7 +84,7 @@ The first time the script is run, it will run in the ramses_rf 'eavesdrop' mode,
 
 A list of currently found devices can be seen at any time by sending a `POST_SCHEMA` command (see below) to the subscribed MQTT channel. This will post the current 'schema', including a list of the devices and zones names detected so far etc, to the `evohome/evogateway/_zone_independent/_gateway_config` MQTT topic. On *exiting* the system, a copy of the internal schema is then saved to a file (default `ramses_rf_schema`), and loaded back during subsequent runs of the script. This file should not normally need to be manually edited (previous versions are overwritten with the current version). 
 
-Additionally, a `devices.json` file is also saved. This file is a simple json dictionary of the devices detected along with the type of device/zone name (if available). This file *can* be edited manually. Incorrect devices (i.e. those misinterpreted during the 'eavesdrop' or those from neighbours etc) should be removed. Device names can also be changed here and will be used for the MQTT topic instead of the device id. 
+Additionally, a `devices.json` file is also saved. This file is a simple json dictionary of the device IDs detected along with a default device name based on its zone name (if the zone name is available at the time the file is saved). This file *can* be edited manually. Incorrect devices (i.e. those misinterpreted during the 'eavesdrop' or those from neighbours etc) should be removed. Device names can also be changed here and will be used for the MQTT topic instead of the device id. 
 
 Note that the IDs in this `devices.json` forms the `allowed_list` - i.e. only messages from devices itemised in this file will be processed in future.
 
@@ -96,11 +96,11 @@ Similarly, eavesdropping mode can be re-initiated by deleting the `devices.json`
 ### Sending Commands to the evohome Controller
 The gateway script subsribes to a specific MQTT topic (by default `evohome/evogateway/_zone_independent/command`) for user commands to be sent out over the evohome radio network. 
 
-JSON messages to this topic are picked up by the script, processed and converted into the format required by evohome, and then transmitted to the appropriate device. For this process, the gateway script in-effect pretends to be an Honeywell HGI80 device, with a device ID starting with "18:" (the ID is fixed in the arduino firware).
+JSON messages to this topic are picked up by the script, processed and converted into the format required by evohome, and then transmitted to the appropriate device. For this process, the gateway script in-effect pretends to be an Honeywell HGI80 device, with a device ID starting with `18:` (the ID is fixed in the arduino firware).
 
 For users coming from earlier versions, it should be noted that the content of the JSON message to send commands has signficantly changed, to keep aligned with the underlying ramses_rf library. The new format of the JSON send command message is as follows:
 
-```json
+```
 {"command": "<command method>", "<keyword 1>" : "<keyword 1 value>", "<keyword 2>" : "<keyword 2 value>"...}
 ```
 
@@ -145,7 +145,7 @@ Date/time values should be sent in the in the usual iso format, e.g. to turn the
 {"command" : "set_dhw_mode", "active": true, "until" : "2021-05-31T17:40:00"}
 ```
 
-In addition to using the built-in ramses_rf command constructors, a command `code` can still be sent but again the message structure has been changed to keep aligned with the ramses_rf framework. When sending a command `code`, both `verb` and `payload` must also be included, where `verb` is usually RQ, RP, W etc. and `payload` is the **hex** payload that for the given command code. Optionally `dest_id` may be specified with the ID of the recipient device, if the command is not being sent to the controller (default). , the json message format has again been updated to keep in line with the ramses_rf code. 
+In addition to using the built-in ramses_rf command constructors, a command `code` can still be sent but again the message structure has been changed to keep aligned with the ramses_rf framework. When sending a command `code`, both `verb` and `payload` must also be included, where `verb` is usually RQ, RP, W etc. and `payload` is the **hex** payload that for the given command code. Optionally `dest_id` may be specified with the ID of the recipient device, if the command is not being sent to the controller (default).
 
 An equivalent example for getting the 1st system log entry but using the command code would be:
 
