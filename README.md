@@ -198,7 +198,7 @@ evoGateway requires the **[evofw3](https://github.com/ghoti57/evofw3)** arduino 
 
 
 ### Credits
-evoGateway is based substantially around the `ramses_rf` python framework library written and maintained by David Bonnes (@zxdavb) - https://github.com/zxdavb/ramses_rf, and of course credit to Peter Price (@ghoti57) for his `evofw3` firmware for the arduinio, without which none of this would be possible!
+evoGateway is based substantially around the `ramses_rf` python framework library written and maintained by David Bonnes (@zxdavb) - https://github.com/zxdavb/ramses_rf, and of course credit to Peter Price (@ghoti57) for his **[evofw3](https://github.com/ghoti57/evofw3)** firmware for the arduinio, without which none of this would be possible!
 
 (Older pre-version 3 of this script was based on the Domitcz source, specifically the `evohomeRadio.cpp` file, by *fulltalgoRythm* - https://github.com/domoticz/domoticz/blob/development/hardware/evohomeRadio.cpp). 
 
