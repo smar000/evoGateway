@@ -532,7 +532,7 @@ def update_zones_from_gwy():
             #TODO! If there are multiple ufh controllers, circuit numbers in ufh_circuits will have to be dependent on controller ID - is this available in messages?
             if "circuits" in schema["underfloor_heating"][ufc_id] and len(schema["underfloor_heating"][ufc_id]["circuits"]) > 0:
                 for c in schema["underfloor_heating"][ufc_id]["circuits"]:
-                    UFH_CIRCUITS[c["ufh_idx"]] = c    
+                    UFH_CIRCUITS[c] = schema["underfloor_heating"][ufc_id]["circuits"][c]
     
     mqtt_publish_schema()
 
@@ -632,7 +632,7 @@ def mqtt_publish_received_msg(msg, payload):
             else:
                 src_device = f"{DHW_ZONE_PREFIX}/{src_device}" 
         
-        if "until" in payload and " " in payload["until"]:
+        if not MQTT_PUB_AS_JSON and "until" in payload and payload["until"] and " " in payload["until"]:
             # Patch with T separator
             try:            
                 d, t = payload["until"].split(" ")
