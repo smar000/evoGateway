@@ -71,7 +71,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.0"
+VERSION         = "3.0.4"
 
 
 CONFIG_FILE     = "evogateway.cfg"
@@ -207,36 +207,39 @@ def get_device_name(device_address):
         traceback.print_stack()
 
 
-def get_msg_zone_name(device_id, target_zone_id=None):
+def get_msg_zone_name(src, target_zone_id=None):
     """ Use any 'target' zone name given in the payload, otherwise fall back to zone name of the sending device"""    
-    
-    # If target of the message is a zone, use that 
-    if target_zone_id and int(target_zone_id, 16) >= 0:       
+        
+    # If target of the message is a zone, use that unless the device type is a BDR or OTB etc.
+    if src.type not in "13 10" and target_zone_id and int(target_zone_id, 16) >= 0:       
+        # 
         # zone = GWY.evo.zone_by_idx[target_zone_id] if GWY.evo else None
         # zone_name = zone.name if zone else "_zone_{}".format(target_zone_id)
 
         if target_zone_id not in ZONES:
             update_zones_from_gwy()                
         zone_name = ZONES[target_zone_id] if target_zone_id in ZONES else "_zone_{}".format(target_zone_id)
-
     else:
-        if not device_id in DEVICES:
+        if not src.id in DEVICES:
             update_devices_from_gwy()
 
-        src_zone_id = DEVICES[device_id]["zone_id"] if device_id in DEVICES and "zone_id" in DEVICES[device_id] else None
+        src_zone_id = DEVICES[src.id]["zone_id"] if src.id in DEVICES and "zone_id" in DEVICES[src.id] else None
         if src_zone_id and not isinstance(src_zone_id, str):
             print(f"{Style.BRIGHT}{Fore.RED}[DEBUG] -----------> src_zone_id ({src_zone_id}) is not string: type = {type(src_zone_id)}. Device_id: {device_id}, target_zone_id: {target_zone_id}. {Style.RESET_ALL}")
             traceback.print_stack()
-
-        dev_type = device_id[:2]
-        if dev_type in "01 02 10 18" or target_zone_id == "-1":
+        
+        if src.type in "01 18" or target_zone_id == "-1":
+            # Controllers and HGI 
             zone_name = MQTT_ZONE_IND_TOPIC
-        elif (src_zone_id and int(src_zone_id, 16) > 11) or dev_type in "13":
+        elif (src_zone_id and int(src_zone_id, 16) > 11) or src.type in "02 10 13":
+            # Relay types, e.g. BDR, OTB, UFC
             zone_name = f"{MQTT_ZONE_IND_TOPIC}/relays"
         elif src_zone_id and int(src_zone_id, 16) >= 0 and src_zone_id in ZONES:            
+            # Normal 'zones'
             zone_name = ZONES[src_zone_id] 
         else:
             zone_name = MQTT_ZONE_UNKNOWN
+
     return zone_name
 
 
@@ -454,6 +457,9 @@ def save_zones():
         save_json_to_file(ZONES, ZONES_FILE, False)
 
 
+def get_existing_device_name(device_id):
+    return DEVICES[device_id]["name"] if device_id in DEVICES and "name" in DEVICES[device_id] else None
+
 def update_devices_from_gwy(ignore_unnamed_zones=False):
     
     schema = GWY.evo.schema if GWY.evo else  GWY.schema
@@ -467,7 +473,8 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
 
     if "system" in schema and schema["system"] and "heating_control" in schema["system"]:
         device_id = schema["system"]["heating_control"]
-        DEVICES[device_id] = {"name": get_device_type_and_id(device_id)}
+        org_name = get_existing_device_name(device_id)
+        DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
 
     if "zones" in schema:
         for zone_id, zone_items in schema["zones"].items():            
@@ -480,13 +487,9 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
                     zone_name = None                    
 
                 for device_id in zone_items["devices"]:      
-                    if device_id in DEVICES and "name" in DEVICES[device_id]:
-                        org_name = DEVICES[device_id]["name"]
-                    else:
-                        org_name = None
-                    DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", 
-                                            "zone_id": zone_id}
-
+                    org_name = get_existing_device_name(device_id)
+                    DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
+                    
     if "stored_hotwater" in schema:
         for dhw_device_type in schema["stored_hotwater"]:
             device_id = schema["stored_hotwater"][dhw_device_type]            
@@ -496,11 +499,13 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
     if "underfloor_heating" in schema:
         ufc_ids = list(schema["underfloor_heating"].keys())
         for ufc_id in ufc_ids:
-            DEVICES[ufc_id] = {"name": f"UFH Controller {get_device_type_and_id(ufc_id)}"}              
+            org_name = get_existing_device_name(ufc_id)
+            DEVICES[ufc_id] =  {"name": org_name if org_name else f"UFH Controller {get_device_type_and_id(ufc_id)}"}              
         
     if "orphans" in schema and schema["orphans"]:
         for device_id in schema["orphans"]:
-            DEVICES[device_id] = {"name": get_device_type_and_id(device_id)}
+            org_name = get_existing_device_name(ufc_id)
+            DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
 
     mqtt_publish_schema()
 
@@ -592,9 +597,11 @@ def mqtt_publish_received_msg(msg, payload):
         log.error(f"Payload in mqtt_publish_received_msg is not of type dict. type(payload): {type(payload)}, payload arg: {payload}, msg.payload: {msg.payload}")
 
     try:
-        target_zone_id = None
-        if "parent_idx" in payload:
-            target_zone_id = payload["parent_idx"]
+        target_zone_id = None        
+
+        if "parent_idx" in payload and msg.src.type not in "10 13":
+            # Ignore parent_idx if device type is OTB or BDR
+            target_zone_id = payload["parent_idx"]            
         elif "zone_idx" in payload:
             target_zone_id = payload["zone_idx"]
         elif "ufh_idx" in str(payload):
@@ -603,29 +610,29 @@ def mqtt_publish_received_msg(msg, payload):
             if UFH_CIRCUITS and payload["ufh_idx"] in UFH_CIRCUITS:
                 target_zone_id = UFH_CIRCUITS[payload["ufh_idx"]]["zone_idx"]        
             
-
         if msg.src.id not in DEVICES: # Refresh zones/devices list
             update_zones_from_gwy()
             update_devices_from_gwy()           
-        
-        if hasattr(msg.src, "zone") and msg.src.zone:      
-            src_zone_id = msg.src.zone.idx
+
+        if hasattr(msg.src, "zone") and msg.src.zone and hasattr(msg.src.zone, "idx") and msg.src.zone.idx and not "HW" in msg.src.zone.idx:
+            src_zone_id = msg.src.zone.idx            
         elif hasattr(msg.src, "_domain_id") and msg.src._domain_id and int(msg.src._domain_id, 16) >= 0:        
             src_zone_id = msg.src._domain_id
         else:
             src_zone_id = None
-
+        
         if (target_zone_id and 0 <= int(target_zone_id, 16) < 12) or (src_zone_id and 0 <= int(src_zone_id, 16) < 12):
             if MQTT_GROUP_BY_ZONE and MQTT_REQUIRE_ZONE_NAMES and (not ZONES or (target_zone_id not in ZONES and src_zone_id not in ZONES)):
                 # MQTT topic requires zone name...
                 update_zones_from_gwy()
                 if target_zone_id and target_zone_id not in ZONES and src_zone_id not in ZONES: 
+                    log.error(f"Both 'target_zone_id' and 'src_zone_id' not found in ZONES")
                     return # Return unless we have the zone name, as otherwise cannot build topic
 
-        src_zone = to_snake(get_msg_zone_name(msg.src.id, target_zone_id)) #if not target_zone_id or target_zone_id <1 else get_device_zone_name(target_zone_id)
+        src_zone = to_snake(get_msg_zone_name(msg.src, target_zone_id)) #if not target_zone_id or target_zone_id <1 else get_device_zone_name(target_zone_id)
         src_device = to_snake(get_device_name(msg.src))
 
-        if ("dhw_" in msg.code_name or "dhw_" in src_device) and DHW_ZONE_PREFIX:
+        if ("dhw_" in msg.code_name or "dhw_" in src_device or (src_zone_id and "HW" in src_zone_id)) and DHW_ZONE_PREFIX:
             # treat DHW as a zone if we are grouping by zone, otherwise as a device prefix
             if MQTT_GROUP_BY_ZONE:
                 src_zone = f"{DHW_ZONE_PREFIX}" 
@@ -718,13 +725,12 @@ def mqtt_publish_schema():
     MQTT_CLIENT.publish(f"{topic}/schema", json.dumps(GWY.schema if GWY.evo is None else GWY.evo.schema, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/params", json.dumps(GWY.params if GWY.evo is None else GWY.evo.params, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/status", json.dumps(GWY.status if GWY.evo is None else GWY.evo.status, sort_keys=True), 0, True)
-    MQTT_CLIENT.publish(f"{topic}/config", json.dumps(GWY.config, sort_keys=True), 0, True)
+    MQTT_CLIENT.publish(f"{topic}/config", json.dumps(vars(GWY.config), sort_keys=True), 0, True)
 
     MQTT_CLIENT.publish(f"{topic}/devices", json.dumps(DEVICES, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/zones", json.dumps(ZONES), 0, True)
     MQTT_CLIENT.publish(f"{topic}/uhf_circuits", json.dumps(UFH_CIRCUITS, sort_keys=True), 0, True)
-    
-    
+        
     timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%X")        
     MQTT_CLIENT.publish(f"{topic}/_gateway_config_ts", timestamp, 0, True)
 
