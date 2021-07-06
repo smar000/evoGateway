@@ -71,7 +71,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.4"
+VERSION         = "3.0.5"
 
 
 CONFIG_FILE     = "evogateway.cfg"
@@ -166,7 +166,10 @@ def to_snake(name):
 
 
 def truncate_str(str, length):
-    return (str[:length - 3] + '...') if len(str) > length else str
+    if str:
+        return (str[:length - 3] + '...') if len(str) > length else str
+    else:
+        return None
 
 
 def _proc_kwargs(obj, kwargs) -> Tuple[dict, dict]:
@@ -203,7 +206,7 @@ def get_device_name(device_address):
         return name
 
     except Exception as ex:
-        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured for device_address '{device_address}': {ex}", exc_info=True)
+        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured for device_address '{device_address}': {ex}{Style.RESET_ALL}", exc_info=True)
         traceback.print_stack()
 
 
@@ -384,20 +387,20 @@ def display_simple_msg(msg, payload_dict, target_zone_id, suffix_text=""):
         else:
             style_prefix = f"{Style.RESET_ALL}"
         
-        main_txt = f"{filtered_text: <45} {zone_name:<25}"
+        main_txt = f"{filtered_text: <45} {zone_name:<25}"        
         print_formatted_row(src, dst, msg.verb, msg.code_name, f"{main_txt: <75} {zone_id} {suffix_text}", msg.rssi, style_prefix)          
 
     except Exception as e:
         log.error(f"Exception occured: {e}", exc_info=True)
         log.error(f"msg: {msg}, payload_dict: {payload_dict}, target_zone_id: {target_zone_id}, suffix_text: {suffix_text}")
         log.error(f"type(display_text): {type(display_text)}")
-        # log.error(f"Display row: {msg.verb}| {src} -> {dst} | {display_text} {zone_name} [Zone {target_zone_id}] {suffix_text}")
-
+        log.error(f"Display row: {msg.code_name}: {msg.verb}| {src} -> {dst} | {display_text} {zone_name} [Zone {target_zone_id}] {suffix_text}")
+        log.error(f"|rssi '{msg.rssi}'| src '{src}' -> dst '{dst}' | verb '{msg.verb}'| cmd '{msg.code_name}'")
 
 def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", style_prefix=""):
     dtm = datetime.datetime.now().strftime("%Y-%m-%d %X")
     if src:
-        row = f"{dtm} |{rssi}| {truncate_str(src, 21):<21} -> {truncate_str(dst, 21):<21} |{verb:<2}| {cmd:<15} | {text}"
+        row = f"{dtm} |{rssi}| {truncate_str(src, 21) if src else '':<21} -> {truncate_str(dst, 21) if dst else '':<21} |{verb:<2}| {cmd:<15} | {text}"
     else:
         row = f"{dtm} | {text}"
     row = "{:<{min_row_width}}".format(row, min_row_width=MIN_ROW_LENGTH)        
@@ -429,18 +432,19 @@ def save_schema_and_devices():
     if not GWY:
         log.error("Schema cannot be saved as GWY is none")
         return
+    
     try:
         # Save the new 'eavesdropped' ramses_rf schema 
         schema = GWY.schema if GWY.evo is None else GWY.evo.schema
         schema = {"schema" : schema}
-        save_json_to_file(schema, SCHEMA_FILE)
+        save_json_to_file(schema, SCHEMA_FILE, False)
 
         update_zones_from_gwy()
         update_devices_from_gwy()        
 
         if DEVICES:
-            devices_simple = {k : {"name" : DEVICES[k]["name"]} for k in DEVICES}
-            save_json_to_file(devices_simple, DEVICES_FILE)
+            devices_simple = {str(k) : {"name" : DEVICES[k]["name"]} for k in DEVICES if k is not None}
+            save_json_to_file(devices_simple, DEVICES_FILE, True)
         
         if ZONES:
             save_json_to_file(ZONES, ZONES_FILE, False)
@@ -448,7 +452,7 @@ def save_schema_and_devices():
         print(f"Updated '{DEVICES_FILE}' and ramses_rf schema files generated")
     except Exception as e:
         log.error(f"Exception occured: {e}", exc_info=True)
-        log.error(f"------------> schema: {schema}")                
+        traceback.print_stack()             
 
 
 def save_zones():
@@ -460,10 +464,9 @@ def save_zones():
 def get_existing_device_name(device_id):
     return DEVICES[device_id]["name"] if device_id in DEVICES and "name" in DEVICES[device_id] else None
 
-def update_devices_from_gwy(ignore_unnamed_zones=False):
-    
-    schema = GWY.evo.schema if GWY.evo else  GWY.schema
 
+def update_devices_from_gwy(ignore_unnamed_zones=False):    
+    schema = GWY.evo.schema if GWY.evo else  GWY.schema
     global DEVICES
     # DEVICES = {}
 
@@ -477,7 +480,12 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
         DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
 
     if "zones" in schema:
-        for zone_id, zone_items in schema["zones"].items():            
+        for zone_id, zone_items in schema["zones"].items():       
+            if "sensor" in zone_items:
+                sensor_id = zone_items["sensor"]
+                org_name = get_existing_device_name(sensor_id)
+                DEVICES[sensor_id] = {"name": org_name if org_name else f"{get_device_type_and_id(sensor_id)}", "zone_id": zone_id}
+                
             if "devices" in zone_items:
                 if zone_id in ZONES:
                     zone_name = ZONES[zone_id]
@@ -487,8 +495,9 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
                     zone_name = None                    
 
                 for device_id in zone_items["devices"]:      
-                    org_name = get_existing_device_name(device_id)
-                    DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
+                    if device_id is not None:
+                        org_name = get_existing_device_name(device_id)
+                        DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
                     
     if "stored_hotwater" in schema:
         for dhw_device_type in schema["stored_hotwater"]:
@@ -504,7 +513,7 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
         
     if "orphans" in schema and schema["orphans"]:
         for device_id in schema["orphans"]:
-            org_name = get_existing_device_name(ufc_id)
+            org_name = get_existing_device_name(device_id)
             DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
 
     mqtt_publish_schema()
@@ -543,13 +552,13 @@ def update_zones_from_gwy():
 
 
 def get_device_type_and_id(device_id):
-    if ":" in device_id and len(device_id) == 9:
+    if device_id and ":" in device_id and len(device_id) == 9:
         id_parts = device_id.split(":")
         dev_type = DEVICE_TABLE[id_parts[0]]["type"]
         return f"{dev_type}:{id_parts[1]}"
     else:
-        print(f"{Style.BRIGHT}{Fore.RED}Invalid device_id: {device_id}{Style.RESET_ALL}")
-        traceback.print_stack()
+        log.debug(f"get_device_type_and_id: Ignorning invalid device_id of '{device_id}'")
+        log.debug(traceback.format_exc())
 
 def mqtt_initialise():
     if not MQTT_SERVER:
@@ -727,7 +736,7 @@ def mqtt_publish_schema():
     MQTT_CLIENT.publish(f"{topic}/status", json.dumps(GWY.status if GWY.evo is None else GWY.evo.status, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/config", json.dumps(vars(GWY.config), sort_keys=True), 0, True)
 
-    MQTT_CLIENT.publish(f"{topic}/devices", json.dumps(DEVICES, sort_keys=True), 0, True)
+    MQTT_CLIENT.publish(f"{topic}/devices", json.dumps({str(k):  v for k, v in DEVICES.items()}, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/zones", json.dumps(ZONES), 0, True)
     MQTT_CLIENT.publish(f"{topic}/uhf_circuits", json.dumps(UFH_CIRCUITS, sort_keys=True), 0, True)
         
@@ -827,8 +836,8 @@ def normalise_config_schema(config) -> Tuple[str, dict]:
     return serial_port, config
 
 
-def save_json_to_file(file_content, file_name, sorted=True):
-    try:
+def save_json_to_file(file_content, file_name, sorted=False):
+    # try:
         if os.path.isfile(file_name):        
             
             if os.path.isfile(f"{file_name}.{MAX_SAVE_FILE_COUNT}"):                    
@@ -854,9 +863,9 @@ def save_json_to_file(file_content, file_name, sorted=True):
         with open(file_name,'w') as fp:
             fp.write(json.dumps(file_content, sort_keys=sorted, indent=4))
         fp.close()
-    except Exception as e:
-        log.error(f"Exception occured saving file '{file_name}': {e}", exc_info=True)
-        log.error(f"{json.dumps(file_content)}")
+    # except Exception as e:
+    #     log.error(f"Exception occured saving file '{file_name}': {e}", exc_info=True)
+    #     log.error(f"{json.dumps(file_content)}")
     
 
 def load_json_from_file(file_path):
@@ -936,20 +945,23 @@ def initialise_sys(kwargs):
 
     if LOAD_ZONES_FROM_FILE:
         ZONES = load_json_from_file(ZONES_FILE)
-        
-    print_formatted_row("", text="")
-    print_formatted_row("", text="------------------------------------------------------------------------------------------")
-    print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
 
-    for key in sorted(DEVICES):
-        dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
-        zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
-        zone_id = zone_ids[0] if zone_ids else None
-        zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
-        print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
+    if "schema" in DEVICES and "zones" in DEVICES["schema"]:
+        print_formatted_row("", text="")
+        print_formatted_row("", text="------------------------------------------------------------------------------------------")
+        print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
 
-    print_formatted_row("", text="------------------------------------------------------------------------------------------")
-    print_formatted_row("", text="")
+        for key in sorted(DEVICES):
+            dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
+            zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
+            zone_id = zone_ids[0] if zone_ids else None
+            zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
+            print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
+
+        print_formatted_row("", text="------------------------------------------------------------------------------------------")
+        print_formatted_row("", text="")
+    else:
+        print_formatted_row("", text="Existing devices file not found. Defaulting to 'eavesdropping' mode")
 
     log.info(f"# evogateway {VERSION}")
     print_formatted_row('',  text=f"{Style.BRIGHT}{Fore.YELLOW}# evogateway {VERSION}")
@@ -987,15 +999,6 @@ async def main(**kwargs):
     
     mqtt_publish_schema()        
 
-    if GWY:
-        # Always update the zones file on exit
-        save_zones() 
-
-        if SCHEMA_EAVESDROP:
-            # print_ramsesrf_gwy_schema(GWY)
-            save_schema_and_devices()          
-
-    print(msg)
     MQTT_CLIENT.loop_stop()
     
    
@@ -1015,3 +1018,14 @@ if __name__ == "__main__":
         msg = f" - ended via: EvohomeError: {err}"
     else:  # if no Exceptions raised, e.g. EOF when parsing
         msg = " - ended without error (e.g. EOF)"
+
+    if GWY:
+        # Always update the zones file on exit
+        save_zones() 
+
+        if SCHEMA_EAVESDROP:
+            print_ramsesrf_gwy_schema(GWY)
+            save_schema_and_devices()          
+
+    print(msg)
+
