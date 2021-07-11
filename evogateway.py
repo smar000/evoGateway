@@ -71,7 +71,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.5"
+VERSION         = "3.0.6"
 
 
 CONFIG_FILE     = "evogateway.cfg"
@@ -345,15 +345,19 @@ def print_ramsesrf_gwy_schema(gwy):
     print(f"Params[{repr(gwy.evo)}] = {json.dumps(gwy.evo.params, indent=4)}\r\n")
     print(f"Status[{repr(gwy.evo)}] = {json.dumps(gwy.evo.status, indent=4)}\r\n")
 
-    orphans = {
-        "orphans": {
-            d.id: d.status for d in sorted(gwy.devices) if d not in gwy.evo.devices
-        }
-    }
-    print(f"Status[gateway] = {json.dumps(orphans, indent=4)}")
+    orphans = [d for d in sorted(gwy.devices) if d not in gwy.evo.devices]
+    devices = {d.id: d.schema for d in orphans}
+    print(f"Schema[orphans] = {json.dumps({'schema': devices}, indent=4)}\r\n")
+    devices = {d.id: d.params for d in orphans}
+    print(f"Params[orphans] = {json.dumps({'params': devices}, indent=4)}\r\n")
+    devices = {d.id: d.status for d in orphans}
+    print(f"Status[orphans] = {json.dumps({'status': devices}, indent=4)}\r\n")
 
-    devices = {"devices": {d.id: d.schema for d in sorted(gwy.devices)}}
-    print(f"Schema[devices] = {json.dumps(devices, indent=4)}")
+    update_devices_from_gwy()
+       
+    if DEVICES:
+        devices = {str(k) : {"name" : DEVICES[k]["name"]} for k in DEVICES if k is not None}
+    print(f"DEVICES = {json.dumps(devices, indent=4)}")
 
 
 def display_full_msg(msg):
@@ -832,7 +836,7 @@ def normalise_config_schema(config) -> Tuple[str, dict]:
             )
     else:
         config[CONFIG][PACKET_LOG] = {}
-
+    
     return serial_port, config
 
 
@@ -903,11 +907,17 @@ def initialise_sys(kwargs):
         if os.path.isfile(SCHEMA_FILE):
             log.info(f"Loading schema from file '{SCHEMA_FILE}'")
             with open(SCHEMA_FILE) as config_schema:
-                lib_kwargs.update(json.load(config_schema))
-            if COM_PORT: # override with the one in the main config file
-                lib_kwargs[CONFIG][SERIAL_PORT] = COM_PORT
-            log.debug(f"Schema loaded. Updated lib_kwargs: {lib_kwargs}")
-            schema_loaded_from_file = True                
+                schema = json.load(config_schema)
+                if "schema" in schema and "main_controller" in schema["schema"] and schema["schema"]["main_controller"] is None:
+                    schema_loaded_from_file = False
+                    log.warning(f"The existing schema file '{SCHEMA_FILE}' appears to be invalid. Ignoring...")        
+                    SCHEMA_EAVESDROP = True
+                else:
+                    lib_kwargs.update(schema)
+                    if COM_PORT: # override with the one in the main config file
+                        lib_kwargs[CONFIG][SERIAL_PORT] = COM_PORT
+                    log.debug(f"Schema loaded. Updated lib_kwargs: {lib_kwargs}")
+                    schema_loaded_from_file = True                                    
         else:
             log.warning(f"The schema file '{SCHEMA_FILE}' was not found'")
             SCHEMA_EAVESDROP = True
@@ -946,16 +956,19 @@ def initialise_sys(kwargs):
     if LOAD_ZONES_FROM_FILE:
         ZONES = load_json_from_file(ZONES_FILE)
 
-    if "schema" in DEVICES and "zones" in DEVICES["schema"]:
+    if DEVICES and len(DEVICES) >1:
         print_formatted_row("", text="")
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
         print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
 
         for key in sorted(DEVICES):
             dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
-            zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
-            zone_id = zone_ids[0] if zone_ids else None
-            zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
+            if "schema" in lib_kwargs and "zones" in lib_kwargs["schema"]:
+                zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
+                zone_id = zone_ids[0] if zone_ids else None
+                zone_details = f"- Zone {zone_id:<3}" if zone_id else ""                
+            else:
+                zone_details =""
             print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
 
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
