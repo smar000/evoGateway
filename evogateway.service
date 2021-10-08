@@ -8,9 +8,13 @@ StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=evoGateway
 User=root
-WorkingDirectory=/opt/_scripts/evohome/gateway
-ExecStart=/usr/bin/python /opt/scripts/evohome/gateway/evogateway.py --log /var/log/evogateway.log 
-Restart=always
+WorkingDirectory=/opt/scripts/evohome/evogateway
+ExecStart=/usr/bin/python /opt/scripts/evohome/evogateway/evogateway.py --log /var/log/evogateway.log 
+Restart=on-failure
 RestartSec=10
 KillMode=process
 
+[Install]
+Alias=evogateway
+#WantedBy=default.target
+#WantedBy=mosquitto.service

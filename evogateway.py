@@ -23,36 +23,37 @@ from logging.handlers import RotatingFileHandler
 from datetime import timedelta as td
 
 from ramses_rf import Gateway, GracefulExit
-from ramses_rf.command import Command
+import ramses_rf
+from ramses_rf.protocol.command import Command
+from ramses_rf.const import ATTR_ALIAS
+from ramses_rf.protocol.const import HGI_DEVICE_ID, NON_DEVICE_ID, DEVICE_TABLE
+from ramses_rf.protocol.logger import CONSOLE_COLS
 from ramses_rf.schema import (
-    ALLOW_LIST,
+    KNOWN_LIST,
     CONFIG,
     DISABLE_DISCOVERY,
     DISABLE_SENDING,
     DONT_CREATE_MESSAGES,
-    ENFORCE_ALLOWLIST,
-    ENFORCE_BLOCKLIST,
+    ENFORCE_KNOWNLIST,
     ENABLE_EAVESDROP,
     EVOFW_FLAG,    
     INPUT_FILE,
-    LOG_FILE_NAME,
-    LOG_ROTATE_COUNT,
     MAX_ZONES,
     PACKET_LOG,
     PACKET_LOG_SCHEMA,
     REDUCE_PROCESSING,
     SERIAL_PORT,
     SERIAL_CONFIG,
-    USE_NAMES,
+    USE_ALIASES,
     USE_SCHEMA
 )
-from ramses_rf.const import HGI_DEVICE_ID  
-from ramses_rf.exceptions import EvohomeError
-from ramses_rf.helpers import is_valid_dev_id
-from ramses_rf.packet import CONSOLE_COLS
+from ramses_rf.protocol.schema import (
+    LOG_FILE_NAME,
+    LOG_ROTATE_COUNT
+)
+from ramses_rf.protocol.exceptions import EvohomeError
 from ramses_rf.message import CODE_NAMES as CODE_NAMES
-from ramses_rf.discovery import spawn_execute_cmd
-from ramses_rf.const import NON_DEVICE_ID, DEVICE_TABLE
+# from ramses_rf.discovery import spawn_execute_cmd
 
 LIB_KEYS = (
     INPUT_FILE,
@@ -63,21 +64,46 @@ LIB_KEYS = (
     REDUCE_PROCESSING,
 )
 
-COLORS = {" I": f"{Fore.WHITE}", "RP": f"{Style.BRIGHT}{Fore.CYAN}", "RQ": f"{Fore.CYAN}", 
-          " W": f"{Fore.MAGENTA}", "temperature": f"{Fore.YELLOW}","ERROR": f"{Back.RED}{Fore.YELLOW}"}
+DEFAULT_COLORS = {" I": f"{Fore.WHITE}", "RP": f"{Fore.LIGHTWHITE_EX}", "RQ": f"{Fore.BLACK}", 
+          " W": f"{Fore.MAGENTA}", "temperature": f"{Fore.YELLOW}","ERROR": f"{Back.RED}{Fore.YELLOW}", "mqtt_command": f"{Fore.LIGHTCYAN_EX}" }
 
 
 if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.0.6"
+VERSION         = "3.1-0.14.24"
 
 
 CONFIG_FILE     = "evogateway.cfg"
 
 config = configparser.RawConfigParser()
 config.read(CONFIG_FILE)
+
+def get_display_colorscheme(reload_config=False):
+
+    if reload_config:
+        global CONFIG_FILE
+        global config
+        config.read(CONFIG_FILE)
+
+    colours_string = config.get("MISC", "DISPLAY_COLOURS", fallback=None)
+    try:
+        scheme = eval(colours_string) if colours_string else None
+    except:
+        pass
+    if not scheme: 
+        global DEFAULT_COLORS
+        scheme = DEFAULT_COLORS
+    
+    if not " I" in scheme:  scheme[" I"] = DEFAULT_COLORS[" I"]
+    if not "RQ" in scheme:  scheme["RQ"] = DEFAULT_COLORS["RQ"]
+    if not "RP" in scheme:  scheme["RP"] = DEFAULT_COLORS["RP"]
+    if not " W" in scheme:  scheme[" W"] = DEFAULT_COLORS[" W"]
+    if not "ERROR" in scheme:  scheme["ERROR"] = DEFAULT_COLORS["ERROR"]
+    if not "mqtt_command" in scheme:  scheme["mqtt_command"] = DEFAULT_COLORS["mqtt_command"]
+
+    return scheme
 
 COM_PORT                = config.get("Serial Port","COM_PORT", fallback="/dev/ttyUSB0")
 COM_BAUD                = config.get("Serial Port","COM_BAUD", fallback=115200)
@@ -118,6 +144,7 @@ DHW_ZONE_PREFIX         = config.get("Misc", "DHW_ZONE_PREFIX", fallback="_dhw")
 
 MIN_ROW_LENGTH          = config.get("MISC", "MIN_ROW_LENGTH", fallback=160)
 
+DISPLAY_COLOURS         = get_display_colorscheme()
 SYS_CONFIG_COMMAND      = "sys_config"
 SYSTEM_MSG_TAG          = "*"
 SEND_STATUS_TRANSMITTED = "Transmitted"
@@ -198,7 +225,7 @@ def get_device_name(device_address):
         elif device_address.type in "63":
             name = "UNBOUND"
         else:
-            name = DEVICES[device_address.id]["name"] if device_address.id in DEVICES else device_address.id            
+            name = DEVICES[device_address.id][ATTR_ALIAS] if device_address.id in DEVICES else device_address.id            
         if name == NON_DEVICE_ID: 
             name = ""
         dev_type = DEVICE_TABLE[device_address.type]["type"].replace("---", "").replace("NUL", "")
@@ -206,7 +233,7 @@ def get_device_name(device_address):
         return name
 
     except Exception as ex:
-        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured for device_address '{device_address}': {ex}{Style.RESET_ALL}", exc_info=True)
+        log.error(f"{Style.BRIGHT}{DISPLAY_COLOURS.get('ERROR')}Exception occured for device_address '{device_address}': {ex}{Style.RESET_ALL}", exc_info=True)
         traceback.print_stack()
 
 
@@ -228,7 +255,7 @@ def get_msg_zone_name(src, target_zone_id=None):
 
         src_zone_id = DEVICES[src.id]["zone_id"] if src.id in DEVICES and "zone_id" in DEVICES[src.id] else None
         if src_zone_id and not isinstance(src_zone_id, str):
-            print(f"{Style.BRIGHT}{Fore.RED}[DEBUG] -----------> src_zone_id ({src_zone_id}) is not string: type = {type(src_zone_id)}. Device_id: {device_id}, target_zone_id: {target_zone_id}. {Style.RESET_ALL}")
+            print(f"{Style.BRIGHT}{Fore.RED}[DEBUG] -----------> src_zone_id ({src_zone_id}) is not string: type = {type(src_zone_id)}. src.id: {src.id}, target_zone_id: {target_zone_id}. {Style.RESET_ALL}")
             traceback.print_stack()
         
         if src.type in "01 18" or target_zone_id == "-1":
@@ -356,7 +383,7 @@ def print_ramsesrf_gwy_schema(gwy):
     update_devices_from_gwy()
        
     if DEVICES:
-        devices = {str(k) : {"name" : DEVICES[k]["name"]} for k in DEVICES if k is not None}
+        devices = {str(k) : {ATTR_ALIAS : DEVICES[k][ATTR_ALIAS]} for k in DEVICES if k is not None}
     print(f"DEVICES = {json.dumps(devices, indent=4)}")
 
 
@@ -364,9 +391,9 @@ def display_full_msg(msg):
     """ Show the full json payload (as in the ramses_rf cli client) """
     dtm = f"{msg.dtm:%H:%M:%S.%f}"[:-3]
     if msg.src.type == "18":
-        print(f"{Style.BRIGHT}{COLORS.get(msg.verb)}{dtm} {msg}"[:CONSOLE_COLS])
+        print(f"{Style.BRIGHT}{DISPLAY_COLOURS.get(msg.verb)}{dtm} {msg}"[:CONSOLE_COLS])
     elif msg.verb:
-        print(f"{COLORS.get(msg.verb)}{dtm} {msg}"[:CONSOLE_COLS])
+        print(f"{DISPLAY_COLOURS.get(msg.verb)}{dtm} {msg}"[:CONSOLE_COLS])
     else:
         print(f"{Style.RESET_ALL}{dtm} {msg}"[:CONSOLE_COLS])
 
@@ -382,24 +409,25 @@ def display_simple_msg(msg, payload_dict, target_zone_id, suffix_text=""):
         zone_name = "@ {:<20}".format(truncate_str(ZONES[target_zone_id], 20)) if target_zone_id and int(target_zone_id, 16) >= 0 and target_zone_id in ZONES else ""
         zone_id = "[Zone {:<3}]".format(target_zone_id) if target_zone_id and int(target_zone_id, 16) >= 0 else ""
 
-        if msg.src.type == "18":
-            style_prefix = f"{Style.BRIGHT}{Fore.MAGENTA}"
-        elif msg.code_name in "temperature dhw_temp" :
-            style_prefix = f"{COLORS.get('temperature')}"
+        if msg.src.type == "18": # Messages from the HGI device
+            style_prefix = f"{Fore.LIGHTBLACK_EX}"
+        elif msg.code_name.lower() in DISPLAY_COLOURS :
+            style_prefix = f"{DISPLAY_COLOURS.get(msg.code_name)}"
         elif msg.verb:
-            style_prefix = f"{COLORS.get(msg.verb)}"
+            style_prefix = f"{DISPLAY_COLOURS.get(msg.verb)}"
         else:
             style_prefix = f"{Style.RESET_ALL}"
         
-        main_txt = f"{filtered_text: <45} {zone_name:<25}"        
-        print_formatted_row(src, dst, msg.verb, msg.code_name, f"{main_txt: <75} {zone_id} {suffix_text}", msg.rssi, style_prefix)          
+        main_txt = f"{filtered_text if filtered_text else '-': <45} {zone_name:<25}" 
+        print_formatted_row(src, dst, msg.verb, msg.code_name, f"{main_txt: <75} {zone_id} {suffix_text}", msg._pkt.rssi, style_prefix)          
 
     except Exception as e:
         log.error(f"Exception occured: {e}", exc_info=True)
         log.error(f"msg: {msg}, payload_dict: {payload_dict}, target_zone_id: {target_zone_id}, suffix_text: {suffix_text}")
         log.error(f"type(display_text): {type(display_text)}")
+        log.error(f"filtered_text: {filtered_text}" if filtered_text else "filtered_text is None")
         log.error(f"Display row: {msg.code_name}: {msg.verb}| {src} -> {dst} | {display_text} {zone_name} [Zone {target_zone_id}] {suffix_text}")
-        log.error(f"|rssi '{msg.rssi}'| src '{src}' -> dst '{dst}' | verb '{msg.verb}'| cmd '{msg.code_name}'")
+        log.error(f"|rssi '{msg._pkt.rssi}'| src '{src}' -> dst '{dst}' | verb '{msg.verb}'| cmd '{msg.code_name}'")
 
 def print_formatted_row(src="", dst="", verb="", cmd="", text="", rssi="   ", style_prefix=""):
     dtm = datetime.datetime.now().strftime("%Y-%m-%d %X")
@@ -428,7 +456,7 @@ def send_command_callback(msg) -> None:
             cmd = "UNKNOWN"
         display_text = f"COMMAND SEND FAILED for '{LAST_SEND_MSG}'"
 
-    print_formatted_row(THIS_GATEWAY_NAME, text=display_text, style_prefix=f"{Fore.GREEN}")     
+    print_formatted_row(THIS_GATEWAY_NAME, text=display_text, style_prefix=f"{DISPLAY_COLOURS['mqtt_command']}")     
     log.info(display_text)
 
 
@@ -447,7 +475,7 @@ def save_schema_and_devices():
         update_devices_from_gwy()        
 
         if DEVICES:
-            devices_simple = {str(k) : {"name" : DEVICES[k]["name"]} for k in DEVICES if k is not None}
+            devices_simple = {str(k) : {ATTR_ALIAS : DEVICES[k][ATTR_ALIAS]} for k in DEVICES if k is not None}
             save_json_to_file(devices_simple, DEVICES_FILE, True)
         
         if ZONES:
@@ -466,7 +494,7 @@ def save_zones():
 
 
 def get_existing_device_name(device_id):
-    return DEVICES[device_id]["name"] if device_id in DEVICES and "name" in DEVICES[device_id] else None
+    return DEVICES[device_id][ATTR_ALIAS] if device_id in DEVICES and ATTR_ALIAS in DEVICES[device_id] else None
 
 
 def update_devices_from_gwy(ignore_unnamed_zones=False):    
@@ -476,19 +504,19 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
 
     controller_id = GWY.evo.id if GWY and GWY.evo else (GWY.schema["controller"] if "controller" in GWY.schema else None)   
     if not controller_id is None and not controller_id in DEVICES:
-        DEVICES[controller_id] = {"name": f"Controller"}
+        DEVICES[controller_id] = {ATTR_ALIAS: f"Controller"}
 
     if "system" in schema and schema["system"] and "heating_control" in schema["system"]:
         device_id = schema["system"]["heating_control"]
         org_name = get_existing_device_name(device_id)
-        DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
+        DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
 
     if "zones" in schema:
         for zone_id, zone_items in schema["zones"].items():       
             if "sensor" in zone_items:
                 sensor_id = zone_items["sensor"]
                 org_name = get_existing_device_name(sensor_id)
-                DEVICES[sensor_id] = {"name": org_name if org_name else f"{get_device_type_and_id(sensor_id)}", "zone_id": zone_id}
+                DEVICES[sensor_id] = {ATTR_ALIAS: org_name if org_name else f"{get_device_type_and_id(sensor_id)}", "zone_id": zone_id}
                 
             if "devices" in zone_items:
                 if zone_id in ZONES:
@@ -501,24 +529,24 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
                 for device_id in zone_items["devices"]:      
                     if device_id is not None:
                         org_name = get_existing_device_name(device_id)
-                        DEVICES[device_id] = {"name": org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
+                        DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
                     
     if "stored_hotwater" in schema:
         for dhw_device_type in schema["stored_hotwater"]:
             device_id = schema["stored_hotwater"][dhw_device_type]            
             if device_id:
-                DEVICES[device_id] = {"name": dhw_device_type.replace("_"," ").title()}
+                DEVICES[device_id] = {ATTR_ALIAS: dhw_device_type.replace("_"," ").title()}
     
     if "underfloor_heating" in schema:
         ufc_ids = list(schema["underfloor_heating"].keys())
         for ufc_id in ufc_ids:
             org_name = get_existing_device_name(ufc_id)
-            DEVICES[ufc_id] =  {"name": org_name if org_name else f"UFH Controller {get_device_type_and_id(ufc_id)}"}              
+            DEVICES[ufc_id] =  {ATTR_ALIAS: org_name if org_name else f"UFH Controller {get_device_type_and_id(ufc_id)}"}              
         
     if "orphans" in schema and schema["orphans"]:
         for device_id in schema["orphans"]:
             org_name = get_existing_device_name(device_id)
-            DEVICES[device_id] = {"name": org_name if org_name else get_device_type_and_id(device_id)}
+            DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
 
     mqtt_publish_schema()
 
@@ -588,7 +616,7 @@ def mqtt_on_connect(client, *_):
 
 def mqtt_on_message(client, _, msg):
     payload = str(msg.payload.decode("utf-8"))
-    print_formatted_row("MQTT", text=f"Received MQTT message: {payload}", style_prefix=f"{Fore.GREEN}")        
+    print_formatted_row("MQTT", text=f"Received MQTT message: {payload}", style_prefix=f"{DISPLAY_COLOURS['mqtt_command']}")        
     log.info(f"MQTT message received: {payload}")  
     mqtt_process_msg(payload)
 
@@ -688,19 +716,20 @@ def mqtt_publish_received_msg(msg, payload):
                 updated_payload = [updated_payload]
 
             # Iterate through the list. payload_item should be a dict as updated_payload should now be a list of dict [{...}]
-            for payload_item in updated_payload:                
-                try:
-                    if isinstance(payload_item, dict): # we may have a further dict in the updated_payload - e.g. opentherm msg, system_fault etc
-                        for k in payload_item:
-                            MQTT_CLIENT.publish(f"{subtopic}/{to_snake(k)}", str(payload_item[k]), 0, True)                
-                            log.debug(f"        -> mqtt_publish_received_msg: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
-                    else:
-                        MQTT_CLIENT.publish(subtopic, str(payload_item), 0, True)        
-                        log.info(f"        -> mqtt_publish_received_msg: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
-                except Exception as e:
-                    log.error(f"Exception occured: {e}", exc_info=True)
-                    log.error(f"------------> payload_item: \"{payload_item}\", type(payload_item): \"{type(payload_item)}\", updated_payload: \"{updated_payload}\"")
-                    log.error(f"------------> msg: {msg}")                
+            if updated_payload:
+                for payload_item in updated_payload:                
+                    try:
+                        if isinstance(payload_item, dict): # we may have a further dict in the updated_payload - e.g. opentherm msg, system_fault etc
+                            for k in payload_item:
+                                MQTT_CLIENT.publish(f"{subtopic}/{to_snake(k)}", str(payload_item[k]), 0, True)                
+                                log.debug(f"        -> mqtt_publish_received_msg: 2. Posted subtopic: {subtopic}/{to_snake(k)}, value: {payload_item[k]}")
+                        else:
+                            MQTT_CLIENT.publish(subtopic, str(payload_item), 0, True)        
+                            log.info(f"        -> mqtt_publish_received_msg: 3. item is not a dict. Posted subtopic: {subtopic}, value: {payload_item}, type(playload_item): {type(payload_item)}")
+                    except Exception as e:
+                        log.error(f"Exception occured: {e}", exc_info=True)
+                        log.error(f"------------> payload_item: \"{payload_item}\", type(payload_item): \"{type(payload_item)}\", updated_payload: \"{updated_payload}\"")
+                        log.error(f"------------> msg: {msg}")                
         else:
             MQTT_CLIENT.publish(subtopic, json.dumps(msg.payload), 0, True)
                 
@@ -762,7 +791,9 @@ def mqtt_process_msg(msg):
             if json_data[SYS_CONFIG_COMMAND].upper().strip() == "DISPLAY_FULL_JSON":
                 global DISPLAY_FULL_JSON
                 DISPLAY_FULL_JSON = json_data["value"] if "value" in json_data else False
-                
+            elif json_data[SYS_CONFIG_COMMAND].upper().strip() == "RELOAD_DISPLAY_COLOURS":                
+                global DISPLAY_COLOURS
+                DISPLAY_COLOURS = get_display_colorscheme(True)
             elif json_data[SYS_CONFIG_COMMAND].upper().strip() == "POST_SCHEMA":
                 update_zones_from_gwy()
                 update_devices_from_gwy()
@@ -798,10 +829,18 @@ def mqtt_process_msg(msg):
                 cmd_method = getattr(Command, command_name)
                 cmd_kwargs = sorted(list(inspect.signature(cmd_method).parameters.keys()))
                 kwargs = {x: json_data[x] for x in json_data if x not in "command"}                
-                if not "ctl_id" in kwargs and "ctl_id" in cmd_kwargs:
-                    kwargs["ctl_id"] = GWY.evo.id                    
-
-                gw_cmd = cmd_method(**kwargs)                
+                # if not "ctl_id" in kwargs and "ctl_id" in cmd_kwargs:
+                #     kwargs["ctl_id"] = GWY.evo.id                    
+                if not "dst_id" in kwargs:
+                    kwargs["dst_id"] = GWY.evo.id                    
+                # print(f"-----------------> {kwargs}")
+                try:
+                    gw_cmd = cmd_method(**kwargs)                
+                except Exception as ex:
+                    log.error(f"Error in sending command '{msg}': {ex}")
+                    log.error(f"Command keywords: {cmd_kwargs}")
+                    log.error(f"kwargs: {kwargs}")
+                    print(traceback.format_exc())
 
             else:
                 log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'code' must be specified")
@@ -879,7 +918,7 @@ def load_json_from_file(file_path):
             with open(file_path, 'r') as fp:
                 items = json.load(fp) 
     except Exception as ex:
-        log.error(f"{Style.BRIGHT}{COLORS.get('ERROR')}Exception occured in loading file '{file_path}': {ex}{Style.RESET_ALL}", exc_info=True)
+        log.error(f"{Style.BRIGHT}{DISPLAY_COLOURS.get('ERROR')}Exception occured in loading file '{file_path}': {ex}{Style.RESET_ALL}", exc_info=True)
 
     return items
 
@@ -895,8 +934,8 @@ def initialise_sys(kwargs):
     global SCHEMA_EAVESDROP
     global SCHEMA_FILE
 
-    BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: False, ENFORCE_ALLOWLIST: ALLOWLIST_ENABLED and not SCHEMA_EAVESDROP, ENFORCE_BLOCKLIST: True,
-        EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_NAMES: True, USE_SCHEMA: True}}
+    BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: False, ENFORCE_KNOWNLIST: ALLOWLIST_ENABLED and not SCHEMA_EAVESDROP, 
+        EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_ALIASES: True, USE_SCHEMA: True}}
 
     lib_kwargs, _ = _proc_kwargs((BASIC_CONFIG, {}), kwargs)
 
@@ -927,31 +966,31 @@ def initialise_sys(kwargs):
         # https://github.com/zxdavb/ramses_rf/issues/15?_pjax=%23js-repo-pjax-container#issuecomment-846774151
 
         SCHEMA_EAVESDROP = True
-        # Disable allow_list, so that we get everything
-        if ALLOW_LIST in lib_kwargs[CONFIG]:
-            del lib_kwargs[CONFIG][ALLOW_LIST]
-        lib_kwargs[CONFIG][ENFORCE_ALLOWLIST] = False
+        # Disable known_list, so that we get everything
+        if KNOWN_LIST in lib_kwargs[CONFIG]:
+            del lib_kwargs[CONFIG][KNOWN_LIST]
+        lib_kwargs[CONFIG][ENFORCE_KNOWNLIST] = False
 
-        log.warning(f"Schema file missing or the 'allow_list' section is missing. Defaulting to ramses_rf 'eavesdropping' mode")
+        log.warning(f"Schema file missing or the 'known_list' section is missing. Defaulting to ramses_rf 'eavesdropping' mode")
         log.debug(f"Using temporary config schema: {json.dumps(lib_kwargs)}")
-
+    
     lib_kwargs[CONFIG][ENABLE_EAVESDROP] = SCHEMA_EAVESDROP
     lib_kwargs[CONFIG][DISABLE_SENDING] = GATEWAY_DISABLE_SENDING
 
-    # Load local devices file if available. This forms the 'allow_list' and also allows for custom naming of devices 
+    # Load local devices file if available. This forms the 'known_list' and also allows for custom naming of devices 
     DEVICES = load_json_from_file(DEVICES_FILE) 
     
     # Add this server/gateway as a known device 
-    DEVICES[HGI_DEVICE_ID] = { "name" : THIS_GATEWAY_NAME}    
+    DEVICES[HGI_DEVICE_ID] = { ATTR_ALIAS : THIS_GATEWAY_NAME}    
     SCHEMA_EAVESDROP = len(DEVICES) <= 1
 
-    if not SCHEMA_EAVESDROP and not ALLOW_LIST in lib_kwargs and DEVICES:
-        # Create 'allow_list' from DEVICES
-        allow_list = {ALLOW_LIST: {}}
+    if not SCHEMA_EAVESDROP and not KNOWN_LIST in lib_kwargs and DEVICES:
+        # Create 'known_list' from DEVICES
+        known_list = {KNOWN_LIST: {HGI_DEVICE_ID: { ATTR_ALIAS : THIS_GATEWAY_NAME}}}
         # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
         for d in DEVICES:
-            allow_list[ALLOW_LIST][d] = {"name" : DEVICES[d]["name"]}    
-        lib_kwargs.update(allow_list)
+            known_list[KNOWN_LIST][d] = {ATTR_ALIAS : DEVICES[d][ATTR_ALIAS]}    
+        lib_kwargs.update(known_list)
 
     if LOAD_ZONES_FROM_FILE:
         ZONES = load_json_from_file(ZONES_FILE)
@@ -966,18 +1005,19 @@ def initialise_sys(kwargs):
             if "schema" in lib_kwargs and "zones" in lib_kwargs["schema"]:
                 zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
                 zone_id = zone_ids[0] if zone_ids else None
-                zone_details = f"- Zone {zone_id:<3}" if zone_id else ""                
+                zone_details = f"- Zone {zone_id:<3}" if zone_id else ""    
             else:
                 zone_details =""
-            print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key]['name']:<23} {zone_details}")
+            print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key][ATTR_ALIAS]:<23} {zone_details}")
 
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
         print_formatted_row("", text="")
+        
     else:
         print_formatted_row("", text="Existing devices file not found. Defaulting to 'eavesdropping' mode")
 
-    log.info(f"# evogateway {VERSION}")
-    print_formatted_row('',  text=f"{Style.BRIGHT}{Fore.YELLOW}# evogateway {VERSION}")
+    log.info(f"# evogateway {VERSION} (using 'ramses_rf' library {ramses_rf.version.VERSION})")
+    print_formatted_row('',  text=f"{Style.BRIGHT}{Fore.YELLOW}# evogateway {VERSION} (using 'ramses_rf' library {ramses_rf.version.VERSION})")
 
     return lib_kwargs
     
@@ -985,7 +1025,6 @@ def initialise_sys(kwargs):
 async def main(**kwargs):    
 
     lib_kwargs = initialise_sys(kwargs)
-    
     global GWY
     serial_port, lib_kwargs = normalise_config_schema(lib_kwargs)
     GWY = Gateway(serial_port, **lib_kwargs)    

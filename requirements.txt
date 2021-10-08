@@ -1,3 +1,7 @@
+voluptuous==0.12.1
+colorlog==5.0.1
+pyserial_asyncio==0.5
 colorama==0.4.3
 paho_mqtt==1.5.1
-ramses_rf==0.11.0
+pyserial==3.5
+ramses_rf==0.14.24
