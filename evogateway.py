@@ -73,7 +73,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.3-0.14.24"
+VERSION         = "3.4-0.14.24"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -952,6 +952,9 @@ def mqtt_process_msg(msg):
                 kwargs = {x: json_data[x] for x in json_data if x not in "command"}
                 if not "dst_id" in kwargs:
                     kwargs["dst_id"] = GWY.evo.id
+                if "ctl_id" in cmd_kwargs and not "ctl_id" in kwargs:
+                    kwargs["ctl_id"] = GWY.evo.id
+
                 try:
                     gw_cmd = cmd_method(**kwargs)
                 except Exception as ex:
