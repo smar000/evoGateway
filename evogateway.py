@@ -24,6 +24,7 @@ from datetime import timedelta as td
 from ramses_rf import Gateway, GracefulExit
 from ramses_rf.discovery import GET_SCHED, SET_SCHED
 from ramses_rf.protocol import schedule
+from ramses_rf.protocol import command
 from ramses_rf.version import VERSION as RAMSES_RF_VERSION
 from ramses_rf.protocol.command import Command
 from ramses_rf.const import ATTR_ALIAS
@@ -73,7 +74,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.4-0.14.24"
+VERSION         = "3.5-0.14.24"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -952,7 +953,9 @@ def mqtt_process_msg(msg):
                 kwargs = {x: json_data[x] for x in json_data if x not in "command"}
                 if not "dst_id" in kwargs:
                     kwargs["dst_id"] = GWY.evo.id
-                if "ctl_id" in cmd_kwargs and not "ctl_id" in kwargs:
+
+                # !TODO - not sure why just 'setpoint' requires this, and not others, e.g. datetime
+                if command_name == "set_zone_mode" and not "ctl_id" in kwargs:
                     kwargs["ctl_id"] = GWY.evo.id
 
                 try:
