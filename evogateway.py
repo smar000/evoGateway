@@ -27,8 +27,7 @@ from ramses_rf.protocol import schedule
 from ramses_rf.protocol import command
 from ramses_rf.version import VERSION as RAMSES_RF_VERSION
 from ramses_rf.protocol.command import Command
-from ramses_rf.const import ATTR_ALIAS
-from ramses_rf.protocol.const import HGI_DEVICE_ID, NON_DEVICE_ID, DEVICE_TABLE
+from ramses_rf.protocol.const import HGI_DEVICE_ID, NON_DEVICE_ID, _OUT_DEVICE_TABLE
 from ramses_rf.protocol.logger import CONSOLE_COLS
 from ramses_rf.schema import (
     KNOWN_LIST,
@@ -47,7 +46,9 @@ from ramses_rf.schema import (
     SERIAL_PORT,
     SERIAL_CONFIG,
     USE_ALIASES,
-    USE_SCHEMA
+    USE_SCHEMA,
+    SZ_ALIAS,
+    SZ_UFH_SYSTEM
 )
 from ramses_rf.protocol.schema import (
     LOG_FILE_NAME,
@@ -74,7 +75,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.5-0.14.24"
+VERSION         = "3.6-0.18.6"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -119,8 +120,6 @@ LOAD_ZONES_FROM_FILE    = config.getboolean("Files", "LOAD_ZONES_FROM_FILE", fal
 SCHEMA_FILE             = config.get("Files", "SCHEMA_FILE", fallback="ramsesrf_schema.json")
 MAX_SAVE_FILE_COUNT     = config.getint("Files", "MAX_SAVE_FILE_COUNT", fallback=9)
 
-ALLOWLIST_ENABLED       = config.getboolean("Files", "ALLOWLIST_ENABLED", fallback=True)
-
 MQTT_SERVER             = config.get("MQTT", "MQTT_SERVER", fallback="")
 MQTT_USER               = config.get("MQTT", "MQTT_USER", fallback="")
 MQTT_PW                 = config.get("MQTT", "MQTT_PW", fallback="")
@@ -145,6 +144,7 @@ DHW_ZONE_PREFIX         = config.get("Misc", "DHW_ZONE_PREFIX", fallback="_dhw")
 
 RAMSESRF_DISABLE_DISCOVERY = config.getboolean("Ramses_rf", "DISABLE_DISCOVERY", fallback=False)
 RAMSESRF_ALLOW_EAVESDROP   = config.getboolean("Ramses_rf", "ALLOW_EAVESDROP", fallback=False)
+RAMSESRF_KNOWN_LIST        = config.getboolean("Ramses_rf", "KNOWN_LIST", fallback=True)
 
 MIN_ROW_LENGTH          = config.get("MISC", "MIN_ROW_LENGTH", fallback=160)
 
@@ -159,6 +159,8 @@ SEND_STATUS_TRANSMITTED = "Transmitted"
 SEND_STATUS_FAILED      = "Failed"
 SEND_STATUS_SUCCESS     = "Successful"
 
+SZ_ZONE_NAME            = "name"
+SZ_UFH_CIRCUITS         = "circuits"
 
 # -----------------------------------
 DEVICES = {}
@@ -232,10 +234,10 @@ def get_device_name(device_address):
         elif device_address.type in "63":
             name = "UNBOUND"
         else:
-            name = DEVICES[device_address.id][ATTR_ALIAS] if device_address.id in DEVICES else device_address.id
+            name = DEVICES[device_address.id][SZ_ALIAS] if device_address.id in DEVICES else device_address.id
         if name == NON_DEVICE_ID:
             name = ""
-        dev_type = DEVICE_TABLE[device_address.type]["type"].replace("---", "").replace("NUL", "")
+        dev_type = _OUT_DEVICE_TABLE[device_address.type]["type"].replace("---", "").replace("NUL", "")
         name = "{} {}".format(dev_type, name).strip()
         return name
 
@@ -416,7 +418,7 @@ def cleanup_display_text(msg, display_text):
         log.error(f"msg.payload: {msg.payload}, display_text: {display_text}")
 
 
-def process_gwy_message(msg) -> None:
+def process_gwy_message(msg, prev_msg=None) -> None:
     """ Process received ramses_rf message from Gateway """
 
     log.debug("") # spacer, as we have other debug entries for a given received msg
@@ -474,7 +476,7 @@ def print_ramsesrf_gwy_schema(gwy):
     update_devices_from_gwy()
 
     if DEVICES:
-        devices = {str(k) : {ATTR_ALIAS : DEVICES[k][ATTR_ALIAS]} for k in DEVICES if k is not None}
+        devices = {str(k) : {SZ_ALIAS : DEVICES[k][SZ_ALIAS]} for k in DEVICES if k is not None}
     print(f"DEVICES = {json.dumps(devices, indent=4)}")
 
 
@@ -566,7 +568,7 @@ def save_schema_and_devices():
         update_devices_from_gwy()
 
         if DEVICES:
-            devices_simple = {str(k) : {ATTR_ALIAS : DEVICES[k][ATTR_ALIAS]} for k in DEVICES if k is not None}
+            devices_simple = {str(k) : {SZ_ALIAS : DEVICES[k][SZ_ALIAS]} for k in DEVICES if k is not None}
             save_json_to_file(devices_simple, DEVICES_FILE, True)
 
         if ZONES:
@@ -585,7 +587,7 @@ def save_zones():
 
 
 def get_existing_device_name(device_id):
-    return DEVICES[device_id][ATTR_ALIAS] if device_id in DEVICES and ATTR_ALIAS in DEVICES[device_id] else None
+    return DEVICES[device_id][SZ_ALIAS] if device_id in DEVICES and SZ_ALIAS in DEVICES[device_id] else None
 
 
 def update_devices_from_gwy(ignore_unnamed_zones=False):
@@ -595,19 +597,19 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
 
     controller_id = GWY.evo.id if GWY and GWY.evo else (GWY.schema["controller"] if "controller" in GWY.schema else None)
     if not controller_id is None and not controller_id in DEVICES:
-        DEVICES[controller_id] = {ATTR_ALIAS: f"Controller"}
+        DEVICES[controller_id] = {SZ_ALIAS: f"Controller"}
 
     if "system" in schema and schema["system"] and "heating_control" in schema["system"]:
         device_id = schema["system"]["heating_control"]
         org_name = get_existing_device_name(device_id)
-        DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
+        DEVICES[device_id] = {SZ_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
 
     if "zones" in schema:
         for zone_id, zone_items in schema["zones"].items():
             if "sensor" in zone_items:
                 sensor_id = zone_items["sensor"]
                 org_name = get_existing_device_name(sensor_id)
-                DEVICES[sensor_id] = {ATTR_ALIAS: org_name if org_name else f"{get_device_type_and_id(sensor_id)}", "zone_id": zone_id}
+                DEVICES[sensor_id] = {SZ_ALIAS: org_name if org_name else f"{get_device_type_and_id(sensor_id)}", "zone_id": zone_id}
 
             if "devices" in zone_items:
                 if zone_id in ZONES:
@@ -620,36 +622,35 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
                 for device_id in zone_items["devices"]:
                     if device_id is not None:
                         org_name = get_existing_device_name(device_id)
-                        DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
+                        DEVICES[device_id] = {SZ_ALIAS: org_name if org_name else f"{zone_name} {get_device_type_and_id(device_id)}", "zone_id": zone_id}
 
     if "stored_hotwater" in schema:
         for dhw_device_type in schema["stored_hotwater"]:
             device_id = schema["stored_hotwater"][dhw_device_type]
             if device_id:
-                DEVICES[device_id] = {ATTR_ALIAS: dhw_device_type.replace("_"," ").title()}
+                DEVICES[device_id] = {SZ_ALIAS: dhw_device_type.replace("_"," ").title()}
 
-    if "underfloor_heating" in schema:
-        ufc_ids = list(schema["underfloor_heating"].keys())
+    if SZ_UFH_SYSTEM in schema:
+        ufc_ids = list(schema[SZ_UFH_SYSTEM].keys())
         for ufc_id in ufc_ids:
             org_name = get_existing_device_name(ufc_id)
-            DEVICES[ufc_id] =  {ATTR_ALIAS: org_name if org_name else f"UFH Controller {get_device_type_and_id(ufc_id)}"}
+            DEVICES[ufc_id] =  {SZ_ALIAS: org_name if org_name else f"UFH Controller {get_device_type_and_id(ufc_id)}"}
 
     if "orphans" in schema and schema["orphans"]:
         for device_id in schema["orphans"]:
             org_name = get_existing_device_name(device_id)
-            DEVICES[device_id] = {ATTR_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
+            DEVICES[device_id] = {SZ_ALIAS: org_name if org_name else get_device_type_and_id(device_id)}
 
     mqtt_publish_schema()
 
 
-def update_zones_from_gwy():
+def update_zones_from_gwy(schema=None, params=None):
     """ Refresh local ZONES with zones detected by GWY and has got zone names """
-    if GWY.evo:
-        schema = GWY.evo.schema
-        params = GWY.evo.params
-    else:
-        schema = GWY.schema
-        params = GWY.params
+
+    if not schema:
+        schema = GWY.evo.schema or GWY.schema if GWY else {}
+    if not params:
+        params = GWY.evo.params or GWY.params if GWY else {}
 
     global ZONES
     global UFH_CIRCUITS
@@ -658,26 +659,28 @@ def update_zones_from_gwy():
     # GWY.evo.zone_by_idx['00'] gets zone object (e.g GWY.evo.zone_by_idx['00'].name)
 
     # ZONES = {}
-    if "zones" in schema:
+    if "zones" in schema and params:
         for zone_id in schema["zones"]:
-            if "name" in params["zones"][zone_id] and params["zones"][zone_id]["name"]:
-                ZONES[zone_id] = params["zones"][zone_id]["name"]
+            if "zones" in params and SZ_ZONE_NAME in params["zones"][zone_id] and params["zones"][zone_id][SZ_ZONE_NAME]:
+                ZONES[zone_id] = params["zones"][zone_id][SZ_ZONE_NAME]
 
-    if "underfloor_heating" in schema:
-        ufc_ids = list(schema["underfloor_heating"].keys())
+    if schema and SZ_UFH_SYSTEM in schema:
+        ufc_ids = list(schema[SZ_UFH_SYSTEM].keys())
         for ufc_id in ufc_ids:
             #TODO! If there are multiple ufh controllers, circuit numbers in ufh_circuits will have to be dependent on controller ID - is this available in messages?
-            if "circuits" in schema["underfloor_heating"][ufc_id] and len(schema["underfloor_heating"][ufc_id]["circuits"]) > 0:
-                for c in schema["underfloor_heating"][ufc_id]["circuits"]:
-                    UFH_CIRCUITS[c] = schema["underfloor_heating"][ufc_id]["circuits"][c]
+            if SZ_UFH_CIRCUITS in schema[SZ_UFH_SYSTEM][ufc_id] and len(schema[SZ_UFH_SYSTEM][ufc_id][SZ_UFH_CIRCUITS]) > 0:
+                for c in schema[SZ_UFH_SYSTEM][ufc_id][SZ_UFH_CIRCUITS]:
+                    UFH_CIRCUITS[c] = schema[SZ_UFH_SYSTEM][ufc_id][SZ_UFH_CIRCUITS][c]
 
-    mqtt_publish_schema()
+    # Only publish if GWY initialised
+    if GWY:
+        mqtt_publish_schema()
 
 
 def get_device_type_and_id(device_id):
     if device_id and ":" in device_id and len(device_id) == 9:
         id_parts = device_id.split(":")
-        dev_type = DEVICE_TABLE[id_parts[0]]["type"]
+        dev_type = _OUT_DEVICE_TABLE[id_parts[0]]["type"]
         return f"{dev_type}:{id_parts[1]}"
     else:
         log.debug(f"get_device_type_and_id: Ignorning invalid device_id of '{device_id}'")
@@ -1053,7 +1056,7 @@ def initialise_sys(kwargs):
     global SCHEMA_EAVESDROP
     global SCHEMA_FILE
 
-    BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: RAMSESRF_DISABLE_DISCOVERY, ENFORCE_KNOWNLIST: ALLOWLIST_ENABLED and not SCHEMA_EAVESDROP,
+    BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: RAMSESRF_DISABLE_DISCOVERY, "enforce_knownlist": RAMSESRF_KNOWN_LIST and not SCHEMA_EAVESDROP, ENFORCE_KNOWNLIST: RAMSESRF_KNOWN_LIST and not SCHEMA_EAVESDROP,
         EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_ALIASES: True, USE_SCHEMA: True}}
 
     lib_kwargs, _ = _proc_kwargs((BASIC_CONFIG, {}), kwargs)
@@ -1100,19 +1103,25 @@ def initialise_sys(kwargs):
     DEVICES = load_json_from_file(DEVICES_FILE)
 
     # Add this server/gateway as a known device
-    DEVICES[HGI_DEVICE_ID] = { ATTR_ALIAS : THIS_GATEWAY_NAME}
+    DEVICES[HGI_DEVICE_ID] = { SZ_ALIAS : THIS_GATEWAY_NAME}
     SCHEMA_EAVESDROP = len(DEVICES) <= 1
 
     if not SCHEMA_EAVESDROP and not KNOWN_LIST in lib_kwargs and DEVICES:
         # Create 'known_list' from DEVICES
-        known_list = {KNOWN_LIST: {HGI_DEVICE_ID: { ATTR_ALIAS : THIS_GATEWAY_NAME}}}
+        known_list = {KNOWN_LIST: {HGI_DEVICE_ID: { SZ_ALIAS : THIS_GATEWAY_NAME}}}
         # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
         for d in DEVICES:
-            known_list[KNOWN_LIST][d] = {ATTR_ALIAS : DEVICES[d][ATTR_ALIAS]}
+            known_list[KNOWN_LIST][d] = {SZ_ALIAS : DEVICES[d][SZ_ALIAS]}
         lib_kwargs.update(known_list)
 
     if LOAD_ZONES_FROM_FILE:
         ZONES = load_json_from_file(ZONES_FILE)
+
+    import re
+    DEV_REGEX_ANY = r"^[0-9]{2}:[0-9]{6}$"
+    for ctl_id, schema in lib_kwargs.items():
+        if re.match(DEV_REGEX_ANY, ctl_id):
+            update_zones_from_gwy(schema, {})
 
     if DEVICES and len(DEVICES) >1:
         print_formatted_row("", text="")
@@ -1120,14 +1129,14 @@ def initialise_sys(kwargs):
         print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
 
         for key in sorted(DEVICES):
-            dev_type = DEVICE_TABLE[key.split(":")[0]]["type"]
+            dev_type = _OUT_DEVICE_TABLE[key.split(":")[0]]["type"]
             if "schema" in lib_kwargs and "zones" in lib_kwargs["schema"]:
                 zone_ids = get_parent_keys(lib_kwargs["schema"]["zones"], key)
                 zone_id = zone_ids[0] if zone_ids else None
                 zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
             else:
                 zone_details =""
-            print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key][ATTR_ALIAS]:<23} {zone_details}")
+            print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key][SZ_ALIAS]:<23} {zone_details}")
 
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
         print_formatted_row("", text="")
@@ -1148,6 +1157,8 @@ async def main(**kwargs):
     serial_port, lib_kwargs = normalise_config_schema(lib_kwargs)
     GWY = Gateway(serial_port, **lib_kwargs)
     GWY.create_client(process_gwy_message)
+    update_devices_from_gwy()
+    update_zones_from_gwy()
 
     mqtt_publish_schema()
 

@@ -7,4 +7,5 @@ old_*
 *.cfg
 *.json
 *.json.*
+*.bak
 
