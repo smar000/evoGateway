@@ -52,6 +52,7 @@ from ramses_rf.schema import (
 )
 from ramses_rf.protocol.schema import (
     LOG_FILE_NAME,
+    LOG_ROTATE_BYTES,
     LOG_ROTATE_COUNT
 )
 from ramses_rf.protocol.exceptions import EvohomeError
@@ -75,7 +76,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.6-0.18.6"
+VERSION         = "3.7-0.18.6"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -113,6 +114,7 @@ COM_BAUD                = config.get("Serial Port","COM_BAUD", fallback=115200)
 EVENTS_FILE             = config.get("Files", "EVENTS_FILE", fallback="events.log")
 PACKET_LOG_FILE         = config.get("Files", "PACKET_LOG_FILE", fallback="packet.log")
 LOG_FILE_ROTATE_COUNT   = config.get("Misc", "LOG_FILE_ROTATE_COUNT", fallback=9)
+LOG_FILE_ROTATE_BYTES   = config.get("Misc", "LOG_FILE_ROTATE_BYTES", fallback=1000000)
 
 DEVICES_FILE            = config.get("Files", "DEVICES_FILE", fallback="devices.json")
 ZONES_FILE              = config.get("Files", "ZONES_FILE", fallback="zones.json")
@@ -992,13 +994,16 @@ def normalise_config_schema(config) -> Tuple[str, dict]:
 
     serial_port = config[CONFIG].pop(SERIAL_PORT, COM_PORT)
 
-    if config[CONFIG].get(PACKET_LOG):
-        if not isinstance(config[CONFIG][PACKET_LOG], dict):
-            config[CONFIG][PACKET_LOG] = PACKET_LOG_SCHEMA(
-                {LOG_FILE_NAME: config[CONFIG][PACKET_LOG]}
-            )
+    if config[CONFIG].get(PACKET_LOG) and isinstance(config[CONFIG][PACKET_LOG], dict):
+        return serial_port, config
     else:
-        config[CONFIG][PACKET_LOG] = {}
+        config[CONFIG][PACKET_LOG] = PACKET_LOG_SCHEMA(
+            {
+                LOG_FILE_NAME: config[CONFIG][PACKET_LOG] or PACKET_LOG_FILE,
+                LOG_ROTATE_BYTES: config[CONFIG][LOG_ROTATE_BYTES] if LOG_ROTATE_BYTES in config[CONFIG] and config[CONFIG][LOG_ROTATE_BYTES] else LOG_FILE_ROTATE_BYTES,
+                LOG_ROTATE_COUNT: config[CONFIG][LOG_ROTATE_COUNT] if LOG_FILE_ROTATE_COUNT in config[CONFIG] and config[CONFIG][LOG_FILE_ROTATE_COUNT] else LOG_FILE_ROTATE_COUNT
+            }
+        )
 
     return serial_port, config
 
@@ -1057,7 +1062,7 @@ def initialise_sys(kwargs):
     global SCHEMA_FILE
 
     BASIC_CONFIG = {CONFIG: { DISABLE_SENDING: False, DISABLE_DISCOVERY: RAMSESRF_DISABLE_DISCOVERY, "enforce_knownlist": RAMSESRF_KNOWN_LIST and not SCHEMA_EAVESDROP, ENFORCE_KNOWNLIST: RAMSESRF_KNOWN_LIST and not SCHEMA_EAVESDROP,
-        EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_ALIASES: True, USE_SCHEMA: True}}
+        EVOFW_FLAG: None, MAX_ZONES: 12, LOG_ROTATE_BYTES: LOG_FILE_ROTATE_BYTES,  LOG_ROTATE_COUNT: LOG_FILE_ROTATE_COUNT, PACKET_LOG: PACKET_LOG_FILE, SERIAL_PORT: COM_PORT, USE_ALIASES: True, USE_SCHEMA: True}}
 
     lib_kwargs, _ = _proc_kwargs((BASIC_CONFIG, {}), kwargs)
 
@@ -1118,9 +1123,9 @@ def initialise_sys(kwargs):
         ZONES = load_json_from_file(ZONES_FILE)
 
     import re
-    DEV_REGEX_ANY = r"^[0-9]{2}:[0-9]{6}$"
+    device_regex = r"^01:[0-9]{6}$"
     for ctl_id, schema in lib_kwargs.items():
-        if re.match(DEV_REGEX_ANY, ctl_id):
+        if re.match(device_regex, ctl_id):
             update_zones_from_gwy(schema, {})
 
     if DEVICES and len(DEVICES) >1:
