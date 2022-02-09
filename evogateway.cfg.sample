@@ -9,10 +9,14 @@ COM_BAUD         = 115200
 [Files]
 EVENTS_FILE                 = events.log
 PACKET_LOG_FILE             = packet.log
+LOG_FILE_ROTATE_COUNT       = 9
+LOG_FILE_ROTATE_BYTES       = 1000000
+
 DEVICES_FILE                = devices.json
 SCHEMA_FILE                 = ramses_rf_schema.json
 LOAD_ZONES_FROM_FILE        = True
-MAX_SAVE_FILE_COUNT         = 9
+
+
 
 [MQTT]
 # Required
@@ -34,12 +38,10 @@ MQTT_GROUP_BY_ZONE          = True
 [MISC]
 THIS_GATEWAY_NAME           = evoGateway
 
-# Display full json string from evohome_rf, or just key data item for each row 
+# Display full json string from evohome_rf, or just key data item for each row
 DISPLAY_FULL_JSON            = False
 
 # SCHEMA_EAVESDROP            = False
 
 # Assumes that there is only a single HGI device on the network (in case of spurious HGI device addresses)
 FORCE_SINGLE_HGI            = True
-
-

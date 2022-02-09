@@ -113,8 +113,8 @@ COM_BAUD                = config.get("Serial Port","COM_BAUD", fallback=115200)
 
 EVENTS_FILE             = config.get("Files", "EVENTS_FILE", fallback="events.log")
 PACKET_LOG_FILE         = config.get("Files", "PACKET_LOG_FILE", fallback="packet.log")
-LOG_FILE_ROTATE_COUNT   = config.get("Misc", "LOG_FILE_ROTATE_COUNT", fallback=9)
-LOG_FILE_ROTATE_BYTES   = config.get("Misc", "LOG_FILE_ROTATE_BYTES", fallback=1000000)
+LOG_FILE_ROTATE_COUNT   = config.get("Files", "LOG_FILE_ROTATE_COUNT", fallback=9)
+LOG_FILE_ROTATE_BYTES   = config.get("Files", "LOG_FILE_ROTATE_BYTES", fallback=1000000)
 
 DEVICES_FILE            = config.get("Files", "DEVICES_FILE", fallback="devices.json")
 ZONES_FILE              = config.get("Files", "ZONES_FILE", fallback="zones.json")
@@ -181,7 +181,7 @@ formatter = logging.Formatter('%(asctime)s [%(lineno)s] %(message)s')
 # %(funcName)20s() [%(levelname)s]
 
 # Log file handler
-file_handler = RotatingFileHandler(EVENTS_FILE, maxBytes=1000000, backupCount=LOG_FILE_ROTATE_COUNT)
+file_handler = RotatingFileHandler(EVENTS_FILE, maxBytes=LOG_FILE_ROTATE_BYTES, backupCount=LOG_FILE_ROTATE_COUNT)
 file_handler.setLevel(logging.INFO)
 file_handler.setFormatter(formatter)
 log.addHandler(file_handler)
@@ -1000,8 +1000,10 @@ def normalise_config_schema(config) -> Tuple[str, dict]:
         config[CONFIG][PACKET_LOG] = PACKET_LOG_SCHEMA(
             {
                 LOG_FILE_NAME: config[CONFIG][PACKET_LOG] or PACKET_LOG_FILE,
-                LOG_ROTATE_BYTES: config[CONFIG][LOG_ROTATE_BYTES] if LOG_ROTATE_BYTES in config[CONFIG] and config[CONFIG][LOG_ROTATE_BYTES] else LOG_FILE_ROTATE_BYTES,
-                LOG_ROTATE_COUNT: config[CONFIG][LOG_ROTATE_COUNT] if LOG_FILE_ROTATE_COUNT in config[CONFIG] and config[CONFIG][LOG_FILE_ROTATE_COUNT] else LOG_FILE_ROTATE_COUNT
+                LOG_ROTATE_BYTES: config[CONFIG][LOG_ROTATE_BYTES] if LOG_ROTATE_BYTES in config[CONFIG] and
+                    config[CONFIG][LOG_ROTATE_BYTES] else LOG_FILE_ROTATE_BYTES,
+                LOG_ROTATE_COUNT: config[CONFIG][LOG_ROTATE_COUNT] if LOG_FILE_ROTATE_COUNT in config[CONFIG] and
+                    config[CONFIG][LOG_FILE_ROTATE_COUNT] else LOG_FILE_ROTATE_COUNT
             }
         )
 
