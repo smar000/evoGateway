@@ -76,7 +76,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.8-0.18.6"
+VERSION         = "3.9-0.18.6"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -113,8 +113,8 @@ COM_BAUD                = config.get("Serial Port","COM_BAUD", fallback=115200)
 
 EVENTS_FILE             = config.get("Files", "EVENTS_FILE", fallback="events.log")
 PACKET_LOG_FILE         = config.get("Files", "PACKET_LOG_FILE", fallback="packet.log")
-LOG_FILE_ROTATE_COUNT   = config.get("Files", "LOG_FILE_ROTATE_COUNT", fallback=9)
-LOG_FILE_ROTATE_BYTES   = config.get("Files", "LOG_FILE_ROTATE_BYTES", fallback=1000000)
+LOG_FILE_ROTATE_COUNT   = config.getint("Files", "LOG_FILE_ROTATE_COUNT", fallback=9)
+LOG_FILE_ROTATE_BYTES   = config.getint("Files", "LOG_FILE_ROTATE_BYTES", fallback=1000000)
 
 DEVICES_FILE            = config.get("Files", "DEVICES_FILE", fallback="devices.json")
 ZONES_FILE              = config.get("Files", "ZONES_FILE", fallback="zones.json")
