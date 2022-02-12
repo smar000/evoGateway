@@ -76,7 +76,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.7-0.18.6"
+VERSION         = "3.8-0.18.6"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -646,13 +646,14 @@ def update_devices_from_gwy(ignore_unnamed_zones=False):
     mqtt_publish_schema()
 
 
-def update_zones_from_gwy(schema=None, params=None):
+def update_zones_from_gwy(schema={}, params={}):
     """ Refresh local ZONES with zones detected by GWY and has got zone names """
-
-    if not schema:
-        schema = GWY.evo.schema or GWY.schema if GWY else {}
-    if not params:
-        params = GWY.evo.params or GWY.params if GWY else {}
+    
+    if GWY:
+        if not schema:            
+            schema = GWY.evo.schema if GWY.evo else GWY.schema
+        if not params:
+            params = GWY.evo.params if GWY.evo else GWY.params
 
     global ZONES
     global UFH_CIRCUITS
