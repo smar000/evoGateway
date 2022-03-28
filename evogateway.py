@@ -76,7 +76,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.8-0.18.6"
+VERSION         = "3.8-0.19.2"
 
 CONFIG_FILE     = "evogateway.cfg"
 

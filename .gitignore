@@ -8,4 +8,7 @@ old_*
 *.json
 *.json.*
 *.bak
+*.sh
+*_
+ramses_rf/
 
