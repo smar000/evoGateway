@@ -1,6 +1,7 @@
 [Unit]
-Description=Evohome Listener/Sender Gateway (Python) 
-After=syslog.target
+Description=MQTT gateway for evohome (Python) 
+After=syslog.target network.target mosquitto.service usbip_bind.service
+OnFailure=/opt/scripts/telegram/unit-status-telegram.sh@n.service
 
 [Service]
 Type=simple
@@ -9,12 +10,13 @@ StandardError=syslog
 SyslogIdentifier=evoGateway
 User=root
 WorkingDirectory=/opt/scripts/evohome/evogateway
-ExecStart=/usr/bin/python /opt/scripts/evohome/evogateway/evogateway.py --log /var/log/evogateway.log 
+ExecStart=/opt/scripts/evohome/evogateway/evogateway.sh --log /var/log/evogateway.log 
+ExecStopPost=/opt/scripts/telegram/unit-status-telegram.sh evogateway $SERVICE_RESULT $EXIT_CODE $EXIT_STATUS 
 Restart=on-failure
-RestartSec=10
+RestartSec=30
 KillMode=process
 
 [Install]
 Alias=evogateway
-#WantedBy=default.target
+WantedBy=multi-user.target
 #WantedBy=mosquitto.service

@@ -10,5 +10,7 @@ old_*
 *.bak
 *.sh
 *_
+*.service
 ramses_rf/
-
+tmp/
+bak/
