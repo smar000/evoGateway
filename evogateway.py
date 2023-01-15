@@ -23,7 +23,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import timedelta as td
 
 from ramses_rf import Gateway, GracefulExit
-from ramses_rf.const import SZ_SCHEDULE
+from ramses_rf.const import SZ_DOMAIN_ID, SZ_SCHEDULE, SZ_UFH_IDX
 from ramses_rf.discovery import GET_SCHED, SET_SCHED, spawn_scripts
 from ramses_rf.version import VERSION as RAMSES_RF_VERSION
 from ramses_rf.protocol.command import Command
@@ -52,6 +52,7 @@ from ramses_rf.schemas import (
     SZ_REDUCE_PROCESSING,
     SZ_SYSTEM,
     SZ_ORPHANS,
+    SZ_ORPHANS_HEAT,
     SZ_DHW_SYSTEM,
     SZ_UFH_SYSTEM,
     SZ_APPLIANCE_CONTROL,
@@ -65,7 +66,6 @@ from ramses_rf.schemas import (
     SZ_USE_ALIASES,
     SZ_ALIAS,
     SZ_NAME
-
 )
 
 LIB_KEYS = tuple(SCH_GLOBAL_CONFIG({}).keys()) + (SZ_SERIAL_PORT,)
@@ -79,7 +79,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.10-0.22.40"
+VERSION         = "3.11-0.22.40"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -146,10 +146,9 @@ MQTT_ZONE_IND_TOPIC     = config.get("MQTT", "MQTT_ZONE_INDEP_TOPIC", fallback="
 MQTT_ZONE_UNKNOWN       = config.get("MQTT", "MQTT_ZONE_UNKNOWN", fallback="_zone_unknown")
 
 THIS_GATEWAY_NAME       = config.get("MISC", "THIS_GATEWAY_NAME", fallback="EvoGateway")
-GATEWAY_DISABLE_SENDING = config.getboolean("MISC", "DISABLE_SENDING", fallback=False)
+RAMSESRF_DISABLE_SENDING = config.getboolean("MISC", "DISABLE_SENDING", fallback=False)
 
 DISPLAY_FULL_JSON       = config.getboolean("MISC", "DISPLAY_FULL_JSON", fallback=False)
-SCHEMA_EAVESDROP        = config.getboolean("Misc", "SCHEMA_EAVESDROP", fallback=False)
 FORCE_SINGLE_HGI        = config.getboolean("Misc", "FORCE_SINGLE_HGI", fallback=True)
 DHW_ZONE_PREFIX         = config.get("Misc", "DHW_ZONE_PREFIX", fallback="_dhw")
 
@@ -182,7 +181,7 @@ LAST_SEND_MSG = None
 
 # -----------------------------------
 
-log = logging.getLogger(f"evogateway_log")
+log = logging.getLogger("evogateway_log")
 log.setLevel(logging.DEBUG)
 formatter = logging.Formatter('%(asctime)s [%(lineno)s] %(message)s')
 # %(funcName)20s() [%(levelname)s]
@@ -365,7 +364,7 @@ async def set_schedule_async(gwy, ctl_id: str, schedule: str) -> None:
 
 async def get_schedule_async(gwy, ctl_id: str, zone_idx: str, force_refresh: bool = None) -> None:
     # zone = gwy._get_device(ctl_id, ctl_id=ctl_id)._evo._get_zone(zone_idx)
-    zone = gwy.evo._get_zone(zone_idx)
+    zone = gwy.tcs._get_zone(zone_idx)
     try:
         await zone.get_schedule(force_refresh)
     except Exception as e:
@@ -480,24 +479,14 @@ def process_gwy_message(msg, prev_msg=None) -> None:
 
 
 def print_ramsesrf_gwy_schema(gwy):
-    if gwy.evo is None:
-        print("'GWY.tcs' is None. Defaulting to GWY.schema: ")
-        print(f"Schema[gateway] = {json.dumps(gwy.schema, indent=4)}\r\n")
-        print(f"Params[gateway] = {json.dumps(gwy.params)}\r\n")
-        print(f"Status[gateway] = {json.dumps(gwy.status)}")
-        return
 
-    print(f"Schema[{repr(gwy.evo)}] = {json.dumps(gwy.evo.schema, indent=4)}\r\n")
-    print(f"Params[{repr(gwy.evo)}] = {json.dumps(gwy.evo.params, indent=4)}\r\n")
-    print(f"Status[{repr(gwy.evo)}] = {json.dumps(gwy.evo.status, indent=4)}\r\n")
+    schema = get_current_schema(gwy)
+    print(f"Schema[gateway] = {json.dumps(schema, indent=4)}\r\n")
+    print(f"Params[gateway] = {json.dumps(gwy.params)}\r\n")
+    print(f"Status[gateway] = {json.dumps(gwy.status)}")
 
-    orphans = [d for d in sorted(gwy.devices) if d not in gwy.evo.devices]
-    devices = {d.id: d.schema for d in orphans}
-    print(f"Schema[orphans] = {json.dumps({'schema': devices}, indent=4)}\r\n")
-    devices = {d.id: d.params for d in orphans}
-    print(f"Params[orphans] = {json.dumps({'params': devices}, indent=4)}\r\n")
-    devices = {d.id: d.status for d in orphans}
-    print(f"Status[orphans] = {json.dumps({'status': devices}, indent=4)}\r\n")
+    orphans = [d for d in sorted(gwy.schema[SZ_ORPHANS_HEAT])]
+    print(f"Schema[{SZ_ORPHANS_HEAT}] = {json.dumps({'schema': orphans}, indent=4)}\r\n")
 
     update_devices_from_gwy()
 
@@ -580,6 +569,14 @@ def send_command_callback(msg) -> None:
     log.info(display_text)
 
 
+def get_current_schema(gwy):
+    config = {SZ_CONFIG: vars(gwy.config)}
+    known_list = { SZ_KNOWN_LIST: gwy.known_list}
+    schema = {**config, **gwy.schema, **known_list}
+
+    return schema
+
+
 def save_schema_and_devices():
     if not GWY:
         log.error("Schema cannot be saved as GWY is none")
@@ -587,8 +584,7 @@ def save_schema_and_devices():
 
     try:
         # Save the new discovered/'eavesdropped' ramses_rf schema
-        schema = GWY.schema if GWY.tcs is None else GWY.tcs.schema
-        schema = {SZ_SCHEMA : schema}
+        schema = schema = get_current_schema(GWY)
         save_json_to_file(schema, SCHEMA_FILE, False)
 
         update_zones_from_gwy()
@@ -781,13 +777,13 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
             target_zone_id = payload["parent_idx"]
         elif SZ_ZONE_IDX in payload:
             target_zone_id = payload[SZ_ZONE_IDX]
-        elif "domain_id" in payload:
-            target_zone_id = payload["domain_id"]
-        elif "ufh_idx" in str(payload):
+        elif SZ_DOMAIN_ID in payload:
+            target_zone_id = payload[SZ_DOMAIN_ID]
+        elif SZ_UFH_IDX in str(payload):
             if not UFH_CIRCUITS: # May just need an update
                 update_zones_from_gwy()
-            if UFH_CIRCUITS and payload["ufh_idx"] in UFH_CIRCUITS:
-                target_zone_id = UFH_CIRCUITS[payload["ufh_idx"]][SZ_ZONE_IDX]
+            if UFH_CIRCUITS and payload[SZ_UFH_IDX] in UFH_CIRCUITS and SZ_ZONE_IDX in UFH_CIRCUITS[payload[SZ_UFH_IDX]]:
+                target_zone_id = UFH_CIRCUITS[payload[SZ_UFH_IDX]][SZ_ZONE_IDX]
 
         if msg.src.id not in DEVICES: # Refresh zones/devices list
             update_zones_from_gwy()
@@ -834,13 +830,13 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
             topic_idx = f"/{payload['log_idx']}"
         elif src_zone.endswith("/relays") and "ufx_idx" in payload:
             topic_idx = f"/_ufx_idx_{payload['ufx_idx']}"
-        elif src_zone.startswith(MQTT_ZONE_IND_TOPIC) and (src_device.startswith("hgi_") or src_device.startswith("ctl_") or src_device.startswith("ufc_")) and (SZ_ZONE_IDX in payload or "domain_id" in payload):
+        elif src_zone.startswith(MQTT_ZONE_IND_TOPIC) and (src_device.startswith("hgi_") or src_device.startswith("ctl_") or src_device.startswith("ufc_")) and (SZ_ZONE_IDX in payload or SZ_DOMAIN_ID in payload):
             if SZ_ZONE_IDX in payload:
                 topic_idx = f"/{payload['zone_idx']}"
-            elif payload["domain_id"].lower() in RELAYS:
+            elif payload[SZ_DOMAIN_ID].lower() in RELAYS:
                 topic_idx =  f"/_domain_{payload['domain_id'].upper()}_{to_snake(RELAYS[payload['domain_id'].lower()])}"
             else:
-                topic_idx = payload["domain_id"].lower()
+                topic_idx = payload[SZ_DOMAIN_ID].lower()
         else:
             topic_idx = ""
 
@@ -851,7 +847,7 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
 
         subtopic = topic_base
 
-        # if msg.code_name == "relay_demand" or "domain_id" in payload:
+        # if msg.code_name == "relay_demand" or SZ_DOMAIN_ID in payload:
         #     log.info(f"[DEBUG] ----->                          : payload: {payload}, target_zone_id: {target_zone_id}, msg: {msg}")
         #     log.info(f"[DEBUG] ----->                          : subtopic: '{subtopic}', topic_idx: '{topic_idx}', src_zone: {src_zone}, src_device: {src_device}")
 
@@ -923,7 +919,7 @@ def mqtt_publish_send_status(cmd, status):
 def mqtt_publish_schema():
     topic = f"{MQTT_PUB_TOPIC}/{MQTT_ZONE_IND_TOPIC}/_gateway_config"
 
-    MQTT_CLIENT.publish(f"{topic}/gwy_mode", "eavesdrop" if SCHEMA_EAVESDROP else "monitor", 0, True)
+    MQTT_CLIENT.publish(f"{topic}/gwy_mode", "eavesdrop" if RAMSESRF_ALLOW_EAVESDROP else "monitor", 0, True)
     MQTT_CLIENT.publish(f"{topic}/schema", json.dumps(GWY.schema if GWY.tcs is None else GWY.tcs.schema, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/params", json.dumps(GWY.params if GWY.tcs is None else GWY.tcs.params, sort_keys=True), 0, True)
     MQTT_CLIENT.publish(f"{topic}/status", json.dumps(GWY.status if GWY.tcs is None else GWY.tcs.status, sort_keys=True), 0, True)
@@ -1089,13 +1085,15 @@ def initialise_sys(kwargs):
 
     global DEVICES
     global ZONES
-    global SCHEMA_EAVESDROP
+    global RAMSESRF_ALLOW_EAVESDROP
+    global RAMSESRF_DISABLE_DISCOVERY
     global SCHEMA_FILE
 
     BASIC_CONFIG = { SZ_CONFIG: {
         SZ_DISABLE_SENDING: False,
         SZ_DISABLE_DISCOVERY: RAMSESRF_DISABLE_DISCOVERY,
-        SZ_ENFORCE_KNOWN_LIST: RAMSESRF_KNOWN_LIST and not SCHEMA_EAVESDROP,
+        SZ_ENABLE_EAVESDROP: RAMSESRF_ALLOW_EAVESDROP,
+        SZ_ENFORCE_KNOWN_LIST: RAMSESRF_KNOWN_LIST and RAMSESRF_DISABLE_DISCOVERY,
         SZ_EVOFW_FLAG: None,
         SZ_MAX_ZONES: 12,
         SZ_USE_ALIASES: True }
@@ -1107,7 +1105,7 @@ def initialise_sys(kwargs):
     lib_kwargs, _ = _proc_kwargs((BASIC_CONFIG, {}), kwargs)
 
     schema_loaded_from_file = False
-    if not SCHEMA_EAVESDROP and SCHEMA_FILE is not None:
+    if RAMSESRF_DISABLE_DISCOVERY and SCHEMA_FILE is not None:
         # If we have a ramses_rf schema file (and we are not in eavesdrop mode), use the schema
 
         if os.path.isfile(SCHEMA_FILE):
@@ -1117,7 +1115,7 @@ def initialise_sys(kwargs):
                 if SZ_SCHEMA in schema and SZ_MAIN_TCS in schema[SZ_SCHEMA] and schema[SZ_SCHEMA][SZ_MAIN_TCS] is None:
                     schema_loaded_from_file = False
                     log.warning(f"The existing schema file '{SCHEMA_FILE}' appears to be invalid. Ignoring...")
-                    SCHEMA_EAVESDROP = True
+                    RAMSESRF_DISABLE_DISCOVERY = False
                 else:
                     lib_kwargs.update(schema)
                     if COM_PORT: # override with the one in the main config file
@@ -1126,13 +1124,11 @@ def initialise_sys(kwargs):
                     schema_loaded_from_file = True
         else:
             log.warning(f"The schema file '{SCHEMA_FILE}' was not found'")
-            SCHEMA_EAVESDROP = True
+            RAMSESRF_DISABLE_DISCOVERY = False
 
-    if SCHEMA_EAVESDROP or not schema_loaded_from_file:
-        # Initially enable 'eavesdropping' mode to discover devices. Save these to a schema file for subsequent use
-        # https://github.com/zxdavb/ramses_rf/issues/15?_pjax=%23js-repo-pjax-container#issuecomment-846774151
-
-        SCHEMA_EAVESDROP = True
+    # If we don't have a schema file, set 'discover' mode (discovered schema saved on exit)
+    if not RAMSESRF_DISABLE_DISCOVERY or not schema_loaded_from_file:
+        RAMSESRF_DISABLE_DISCOVERY = False
         # Disable known_list, so that we get everything
         if SZ_KNOWN_LIST in lib_kwargs[SZ_CONFIG]:
             del lib_kwargs[SZ_CONFIG][SZ_KNOWN_LIST]
@@ -1141,17 +1137,21 @@ def initialise_sys(kwargs):
         log.warning(f"Schema file missing or the 'known_list' section is missing. Defaulting to ramses_rf 'eavesdropping' mode")
         log.debug(f"Using temporary config schema: {json.dumps(lib_kwargs)}")
 
-    lib_kwargs[SZ_CONFIG][SZ_ENABLE_EAVESDROP] = SCHEMA_EAVESDROP
-    lib_kwargs[SZ_CONFIG][SZ_DISABLE_SENDING] = GATEWAY_DISABLE_SENDING
 
     # Load local devices file if available. This forms the 'known_list' and also allows for custom naming of devices
     DEVICES = load_json_from_file(DEVICES_FILE)
 
     # Add this server/gateway as a known device
     DEVICES[HGI_DEVICE_ID] = { SZ_ALIAS : THIS_GATEWAY_NAME}
-    SCHEMA_EAVESDROP = len(DEVICES) <= 1
 
-    if not SCHEMA_EAVESDROP and not SZ_KNOWN_LIST in lib_kwargs and DEVICES:
+    # Force discover if we don't have any devices
+    if len(DEVICES) <= 1:
+        RAMSESRF_DISABLE_DISCOVERY = False
+
+    lib_kwargs[SZ_CONFIG][SZ_DISABLE_DISCOVERY] = RAMSESRF_DISABLE_DISCOVERY
+    lib_kwargs[SZ_CONFIG][SZ_DISABLE_SENDING] = RAMSESRF_DISABLE_SENDING
+
+    if RAMSESRF_DISABLE_DISCOVERY and not SZ_KNOWN_LIST in lib_kwargs and DEVICES:
         # Create 'known_list' from DEVICES
         known_list = {SZ_KNOWN_LIST: {HGI_DEVICE_ID: { SZ_ALIAS : THIS_GATEWAY_NAME}}}
         # allowed_list = [{d: {"name": DEVICES[d]["name"]}} for d in DEVICES]
@@ -1260,7 +1260,7 @@ if __name__ == "__main__":
         # Always update the zones file on exit
         save_zones()
 
-        if SCHEMA_EAVESDROP:
+        if RAMSESRF_ALLOW_EAVESDROP or not RAMSESRF_DISABLE_DISCOVERY:
             print_ramsesrf_gwy_schema(GWY)
             save_schema_and_devices()
 
