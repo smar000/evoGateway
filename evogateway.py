@@ -17,10 +17,12 @@ import configparser
 import paho.mqtt.client as mqtt
 import time
 import datetime
+from threading import Timer
+from datetime import timedelta as td
+from types import SimpleNamespace
 from colorama import init as colorama_init, Fore, Style, Back
 import logging
 from logging.handlers import RotatingFileHandler
-from datetime import timedelta as td
 
 from ramses_rf import Gateway, GracefulExit
 from ramses_rf.const import SZ_DOMAIN_ID, SZ_SCHEDULE, SZ_UFH_IDX
@@ -79,7 +81,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.11-0.22.40"
+VERSION         = "3.12-0.22.40"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -170,6 +172,14 @@ SEND_STATUS_FAILED      = "Failed"
 SEND_STATUS_SUCCESS     = "Successful"
 
 RELAYS                  = {"f9": "Radiators", "fa": "DHW", "fc": "Appliance Controller"}
+
+SZ_TOPIC_IDX            = "topic_idx"
+SZ_LOG_IDX              = "log_idx"
+SZ_FRAG_NUMBER          = "frag_number"
+SZ_FORCE_IO             = "force_io"
+
+GET_SCHED_WAIT_PERIOD   = 5
+
 # -----------------------------------
 DEVICES = {}
 ZONES = {}
@@ -282,7 +292,7 @@ def get_msg_zone_name(src, target_zone_id=None):
         # i.e. device source type is BDR/OTB _or_ (not BDR/OTB but target_zone_id < 0)
         try:
             device = GWY.get_device(src.id)
-            src_zone_id = device.zone.zone_idx if hasattr(device, "zone") and hasattr(device.zone, "zone_idx") else None
+            src_zone_id = device.zone.zone_idx if hasattr(device, "zone") and hasattr(device.zone, SZ_ZONE_IDX) else None
             if src_zone_id and src_zone_id not in 'FF HW' and src_zone_id in ZONES:
                 zone_name = ZONES[src_zone_id]
             elif src.type in "01 18" or target_zone_id == "-1":
@@ -321,6 +331,8 @@ def get_opentherm_msg(msg):
 
 
 def spawn_schedule_task(action, **kwargs):
+    """ WIP......... """
+
     ctl_id = GWY.tcs.id
     if action == GET_SCHED:
         if not SZ_ZONE_IDX in kwargs:
@@ -328,76 +340,33 @@ def spawn_schedule_task(action, **kwargs):
             return
 
         zone_idx = kwargs[SZ_ZONE_IDX]
-        force_refresh = kwargs["force_refresh"] if "force_refresh" in kwargs else None
-        kwargs = {"ctl_id": ctl_id, SZ_ZONE_IDX: zone_idx, "force_refresh": force_refresh}
-        tasks = [GWY._loop.create_task(get_schedule_async(GWY, **kwargs))]
+        force_io = kwargs[SZ_FORCE_IO] if SZ_FORCE_IO in kwargs else None
+        zone = GWY.tcs.zone_by_idx[zone_idx]
+
+        if zone.schedule and not force_io:
+            # Schedule already available, so no need for any further io unless we are forcing
+            display_schedule_for_zone(zone_idx)
+            return
+
+        asyncio.ensure_future(zone.get_schedule(force_io=force_io), loop=GWY._loop)
 
     elif action == SET_SCHED:
-        if not SZ_SCHEDULE in kwargs:
+        if not SZ_ZONE_IDX in kwargs:
+            log.error("'set_schedule' requires 'zone_idx' to be specified")
+            return
+        if not SZ_SCHEDULE in kwargs and type(kwargs[SZ_SCHEDULE] is not list):
             log.error("'set_schedule' requires 'schedule' json")
             return
+
+        zone_idx = kwargs[SZ_ZONE_IDX]
+        zone = GWY.tcs.zone_by_idx[zone_idx]
         schedule = kwargs[SZ_SCHEDULE]
-        if not SZ_ZONE_IDX in schedule:
-            log.error("'zone_idx' must be defined in 'schedule' json")
-            return
-        zone_idx = schedule[SZ_ZONE_IDX]
-        kwargs = {"ctl_id": ctl_id, SZ_SCHEDULE: schedule}
-        tasks = [GWY._loop.create_task(set_schedule_async(GWY, **kwargs))]
+        force_refresh = kwargs["force_refresh"] if "force_refresh" in kwargs else None
+        asyncio.ensure_future(zone.set_schedule(schedule), loop=GWY._loop)
 
-    GWY._tasks.extend(tasks)
-    print_formatted_row(SYSTEM_MSG_TAG, text=f"{tasks}")
-    log.info(f"'{action}' for zone {zone_idx} task spawned : {tasks}")
-
-
-async def set_schedule_async(gwy, ctl_id: str, schedule: str) -> None:
-    zone_idx = schedule[SZ_ZONE_IDX]
-    zone = gwy._get_device(ctl_id, ctl_id=ctl_id)._evo._get_zone(zone_idx)
-    try:
-        await zone.set_schedule(schedule[SZ_SCHEDULE])
-        print_formatted_row(
-                            SYSTEM_MSG_TAG,
-                            text="Schedule updated for zone {zone_idx} ({zone.name})")
-    except Exception as e:
-        log.error(f"set_schedule_async(): Error: {e}", exc_info=True)
-        # traceback.print_stack()
-
-
-async def get_schedule_async(gwy, ctl_id: str, zone_idx: str, force_refresh: bool = None) -> None:
-    # zone = gwy._get_device(ctl_id, ctl_id=ctl_id)._evo._get_zone(zone_idx)
-    zone = gwy.tcs._get_zone(zone_idx)
-    try:
-        await zone.get_schedule(force_refresh)
-    except Exception as e:
-        log.error("get_schedule_async(): Error: %s", e)
-
-
-def process_schedule_message(msg):
-    try:
-        # Only process if we have received the last fragment
-        if msg.payload["frag_index"] == msg.payload["frag_total"]:
-            zone_idx = msg.payload[SZ_ZONE_IDX]
-            if zone_idx == "HW":
-                zone = GWY.system_by_id[GWY.tcs.id].dhw
-            else:
-                zone = GWY.system_by_id[GWY.tcs.id].zone_by_idx[zone_idx]
-
-            # zone = GWY.system_by_id[GWY.tcs.id].zone_by_idx[zone_idx]
-            schedule = zone.schedule
-
-            dtm = f"{msg.dtm:%H:%M:%S.%f}"[:-3]
-            if DISPLAY_FULL_JSON:
-                print(f"{DISPLAY_COLOURS.get(msg.verb)}{dtm} "
-                    "Schedule for '{zone.name}' [{zone_idx}]: {schedule}"[:CONSOLE_COLS])
-            else:
-                print_formatted_row(SYSTEM_MSG_TAG,
-                    text=f"Schedule for '{zone.name}' ({zone_idx}): {schedule}")
-
-            msg.payload["topic_idx"] = SZ_SCHEDULE
-            mqtt_publish_received_msg(msg, {SZ_SCHEDULE: schedule, SZ_ZONE_IDX: zone_idx})
-
-    except Exception as e:
-        log.error(f"Exception occured: {e}", exc_info=True)
-        log.error(f"msg: {msg}")
+    # Create timer to display schedule data after GET_SCHED_WAIT_PERIOD seconds
+    timer = Timer(GET_SCHED_WAIT_PERIOD, display_schedule_for_zone, [zone_idx])
+    timer.start()
 
 
 def cleanup_display_text(msg, display_text):
@@ -473,9 +442,6 @@ def process_gwy_message(msg, prev_msg=None) -> None:
             log.error(f"Exception occured: {e}", exc_info=True)
             log.error(f"item: {item}, payload: {payload} ")
             log.error(f"msg: {msg}")
-
-    if msg.code == "0404" and msg.verb == "RP":
-        process_schedule_message(msg)
 
 
 def print_ramsesrf_gwy_schema(gwy):
@@ -828,11 +794,13 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
             topic_idx = f"/{payload['topic_idx']}"
         elif "log_idx" in payload:
             topic_idx = f"/{payload['log_idx']}"
+        elif SZ_FRAG_NUMBER in payload:
+            topic_idx = f"/fragment_{payload['frag_number']}"
         elif src_zone.endswith("/relays") and "ufx_idx" in payload:
             topic_idx = f"/_ufx_idx_{payload['ufx_idx']}"
         elif src_zone.startswith(MQTT_ZONE_IND_TOPIC) and (src_device.startswith("hgi_") or src_device.startswith("ctl_") or src_device.startswith("ufc_")) and (SZ_ZONE_IDX in payload or SZ_DOMAIN_ID in payload):
             if SZ_ZONE_IDX in payload:
-                topic_idx = f"/{payload['zone_idx']}"
+                topic_idx = f"/{payload[SZ_ZONE_IDX]}"
             elif payload[SZ_DOMAIN_ID].lower() in RELAYS:
                 topic_idx =  f"/_domain_{payload['domain_id'].upper()}_{to_snake(RELAYS[payload['domain_id'].lower()])}"
             else:
@@ -899,6 +867,39 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
 
         traceback.print_exc()
         pass
+
+
+def mqtt_publish_zone_schedules(with_display=False):
+    """ Publish all avialable zone schedules"""
+
+    for zone in GWY.tcs.zones:
+        if zone.schedule:
+            # Fake a Message object for publishing...
+            msg = SimpleNamespace(**{"code_name":"zone_schedule", SZ_ZONE_IDX: zone.idx, "src": SimpleNamespace(**{"id": GWY.tcs.id, "type": GWY.get_device(GWY.tcs.id).type, "zone": zone})})
+            mqtt_publish_received_msg(msg, {SZ_SCHEDULE: zone.schedule, SZ_ZONE_IDX: zone.idx})
+            if with_display:
+                display_schedule_for_zone(zone)
+
+
+def display_schedule_for_zone(zone_idx):
+    """ Display schedule for given zone and post to mqtt"""
+
+    zone = GWY.tcs.zone_by_idx[zone_idx]
+    if zone and zone.schedule:
+        schedule = json.dumps(zone.schedule)
+        dtm = f"{datetime.datetime.now():%H:%M:%S.%f}"[:-3]
+        zone_name = f"{zone.name} [{zone.idx}]" if zone.name else f"{zone.idx}"
+        if DISPLAY_FULL_JSON:
+            print(f"{DISPLAY_COLOURS.get('RP')}{dtm} "
+                f"Schedule for zone {zone_name}: {schedule}"[:CONSOLE_COLS])
+        else:
+            print_formatted_row(SYSTEM_MSG_TAG,
+                text=f"Schedule for zone '{zone_name}': {schedule}")
+
+        # Fake a Message object for publishing...
+        msg = SimpleNamespace(**{"code_name":"zone_schedule", SZ_ZONE_IDX: zone.idx, "src": SimpleNamespace(**{"id": GWY.tcs.id, "type": GWY.get_device(GWY.tcs.id).type, "zone": zone})})
+        mqtt_publish_received_msg(msg, {SZ_SCHEDULE: zone.schedule, SZ_ZONE_IDX: zone.idx})
+
 
 
 def mqtt_publish_send_status(cmd, status):
@@ -986,7 +987,7 @@ def mqtt_process_msg(msg):
                     return
                 elif command_name in SET_SCHED:
                     if SZ_SCHEDULE in json_data:
-                        spawn_schedule_task(action=SET_SCHED, schedule=json_data[SZ_SCHEDULE])
+                        spawn_schedule_task(action=SET_SCHED, zone_idx=json_data[SZ_ZONE_IDX],schedule=json_data[SZ_SCHEDULE])
                     elif "schedule_json_file" in json_data:
                         with open(json_data["schedule_json_file"], 'r') as fp:
                             schedule = json.load(fp)
@@ -1170,7 +1171,7 @@ def initialise_sys(kwargs):
 
     serial_port = lib_kwargs[SZ_CONFIG].pop(SZ_SERIAL_PORT, COM_PORT)
 
-    if lib_kwargs[SZ_CONFIG].get(SZ_PACKET_LOG) and isinstance(lib_kwargs[SZ_CONFIG][SZ_PACKET_LOG], dict):
+    if lib_kwargs.get(SZ_PACKET_LOG) and isinstance(lib_kwargs[SZ_CONFIG][SZ_PACKET_LOG], dict):
         #f If packet log requirements already in schema, use these
         return serial_port, lib_kwargs
     else:
@@ -1197,14 +1198,15 @@ def show_startup_info(lib_kwargs):
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
         print_formatted_row("", text=f"{Style.BRIGHT}{Fore.YELLOW}Devices loaded from '{DEVICES_FILE}' file:")
 
-        for key in sorted(DEVICES):
-            dev_type = DEV_TYPE_MAP[key.split(":")[0]]
-            device = GWY.get_device(key) if not "18:" in key else None
-            if device:
-                zone_id = device.zone.zone_idx if hasattr(device, "zone") and hasattr(device.zone, "zone_idx") else None
-                zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
-            else:
-                zone_details =""
+        for key in sorted(DEVICES, key=lambda x: (x is None, x)):
+            if key is not None:
+                dev_type = DEV_TYPE_MAP[key.split(":")[0]]
+                device = GWY.get_device(key) if not "18:" in key else None
+                if device:
+                    zone_id = device.zone.zone_idx if hasattr(device, "zone") and hasattr(device.zone, SZ_ZONE_IDX) else None
+                    zone_details = f"- Zone {zone_id:<3}" if zone_id else ""
+                else:
+                    zone_details =""
             print_formatted_row("", text=f"{Style.BRIGHT}{Fore.BLUE}   {dev_type} {key} - {DEVICES[key][SZ_ALIAS]:<23} {zone_details}")
 
         print_formatted_row("", text="------------------------------------------------------------------------------------------")
