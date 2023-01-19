@@ -81,7 +81,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.12-0.22.40"
+VERSION         = "3.13-0.22.40"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -998,10 +998,14 @@ def mqtt_process_msg(msg):
                 elif command_name and command_name == "ping":
                     command_name = "get_system_time"
 
-                cmd_method = getattr(Command, command_name)
-                cmd_kwargs = sorted(list(inspect.signature(cmd_method).parameters.keys()))
+                ramses_cmd_constructor = getattr(Command, command_name)
+
+
+                # ramses_cmd_kwargs = sorted(list(inspect.signature(ramses_cmd_constructor).parameters.keys()))
+                # inspect.signature not able to get args through the command constructor decorators. Try wrapper attributes
+                ramses_cmd_kwargs = sorted(list(ramses_cmd_constructor.__closure__[0].cell_contents.__annotations__))
                 kwargs = {x: json_data[x] for x in json_data if x not in "command"}
-                if not "dst_id" in kwargs:
+                if ramses_cmd_kwargs and "dst_id" in ramses_cmd_kwargs and "dst_id" not in kwargs:
                     kwargs["dst_id"] = GWY.tcs.id
 
                 # !TODO - not sure why just 'setpoint' requires this, and not others, e.g. datetime
@@ -1009,13 +1013,13 @@ def mqtt_process_msg(msg):
                     kwargs["ctl_id"] = GWY.tcs.id
 
                 try:
-                    gw_cmd = cmd_method(**kwargs)
+                    gw_cmd = ramses_cmd_constructor(**kwargs)
                 except Exception as ex:
                     log.error(f"Error in sending command '{msg}': {ex}")
-                    log.error(f"Command keywords: {cmd_kwargs}")
+                    log.error(f"Command keywords: {ramses_cmd_kwargs}")
                     log.error(f"kwargs: {kwargs}")
                     print(traceback.format_exc())
-
+                    return
             else:
                 log.error(f"Invalid mqtt payload received: '{json.dumps(json_data)}'. Either 'command' or 'code' must be specified")
                 return
