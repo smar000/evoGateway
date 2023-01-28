@@ -819,11 +819,13 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
         #     log.info(f"[DEBUG] ----->                          : payload: {payload}, target_zone_id: {target_zone_id}, msg: {msg}")
         #     log.info(f"[DEBUG] ----->                          : subtopic: '{subtopic}', topic_idx: '{topic_idx}', src_zone: {src_zone}, src_device: {src_device}")
 
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%X%Z")
         if not MQTT_PUB_JSON_ONLY and not no_unpack:
             #Unpack the JSON and publish the individual key/value pairs
 
             if MQTT_PUB_KV_WITH_JSON:
                 # Publish the payload JSON into the subtopic key
+                payload["timestamp"] = timestamp
                 MQTT_CLIENT.publish(subtopic, json.dumps(payload), 0, True)
 
             if msg.code_name == "opentherm_msg":
@@ -857,7 +859,6 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
             # Publish the JSON
             MQTT_CLIENT.publish(subtopic, json.dumps(msg.payload), 0, True)
 
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%X")
         MQTT_CLIENT.publish(f"{topic_base}/{msg.code_name}_ts", timestamp, 0, True)
         # print("published to mqtt topic {}: {}".format(topic, msg))
     except Exception as e:
