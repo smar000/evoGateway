@@ -81,7 +81,7 @@ if  os.path.isdir(sys.argv[0]):
     os.chdir(os.path.dirname(sys.argv[0]))
 
 #---------------------------------------------------------------------------------------------------
-VERSION         = "3.13-0.22.40"
+VERSION         = "3.14-0.22.40"
 
 CONFIG_FILE     = "evogateway.cfg"
 
@@ -825,8 +825,7 @@ def mqtt_publish_received_msg(msg, payload, no_unpack=False):
 
             if MQTT_PUB_KV_WITH_JSON:
                 # Publish the payload JSON into the subtopic key
-                payload["timestamp"] = timestamp
-                MQTT_CLIENT.publish(subtopic, json.dumps(payload), 0, True)
+                MQTT_CLIENT.publish(subtopic, json.dumps(payload | {"timestamp": timestamp}), 0, True)
 
             if msg.code_name == "opentherm_msg":
                 # This is an opentherm_msg. Extract msg item and updated_payload as new dict, with msg_name as key
