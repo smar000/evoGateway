@@ -975,7 +975,11 @@ def mqtt_process_msg(msg):
                 verb = json_data["verb"]
                 payload = json_data["payload"]
                 dest_id = json_data["dest_id"] if "dest_id" in json_data else GWY.tcs.id
-                gw_cmd = GWY.create_cmd(verb, dest_id, command_code, payload)                 # Command.from_attrs()
+                if "from_id" in json_data:                                                      # Allow addition of from_id kwarg
+                    from_id = json_data["from_id"]
+                    gw_cmd = GWY.create_cmd(verb, dest_id, command_code, payload, from_id=from_id)
+                else:
+                    gw_cmd = GWY.create_cmd(verb, dest_id, command_code, payload)                 # Command.from_attrs()
                 log.debug(f"--------> MQTT message converted to Command: '{gw_cmd}'")
 
             elif "command" in json_data:
