@@ -1,110 +1,366 @@
-# evoGateway
-An evohome to MQTT gateway
-_______
+# **evoGateway**
 
-[![](evogateway_screenshot_v3.png)](evogateway_screenshot_v3.png)
+*A local evohome ↔ MQTT integration service*
 
-_________________________
+---
+![alt text](./misc/images/evogateway_screenshot_v4.png "evoGateway Console")
 
 
 ---
 
-**Note** There has been a major rewrite of evoGateway (previously evoListener) as of May 2021, where the underlying underlying decoding (and encoding) of the evohome radio communications has been completely replaced using the excellent `ramses_rf` [framework library](https://github.com/zxdavb/ramses_rf). This has improved the robustness of the system and brought it up to date with some of the previously missing commands now being fully decoded. 
+## **Overview**
 
-However, this has meant that there are **a number of breaking changes** within this version (currently version 3.0), for those coming from an earlier version. In many respects, it may be easier to start fresh with this version.
+evoGateway provides a local, fully independent interface between Honeywell’s evohome RF network and any MQTT-based home automation system.
+
+It receives and decodes RF traffic from evohome devices using the excellent `ramses_rf` library, publishes structured MQTT topics, and also accepts MQTT commands which are transmitted back onto the RF network as if they originated from an evohome Honeywell HGI80.
+
+The gateway operates without relying on Honeywell’s cloud services, offering a robust and responsive integration path for platforms such as openHAB, Home Assistant, and any system capable of consuming or producing MQTT messages.
+
+All RF communication, schema management, and MQTT publishing is performed locally, providing a reliable and transparent interface to the evohome system.
+
+
 
 ---
 
-## What is it?
-evoGateway is a 'gateway' python script that provides an MQTT interface for listening to and sending commands via the radio communcation network between Honeywell's evohome heating control devices. The hardware required for this script is is just (a) an arudino with a USB connector and (b) a CC1101 868Mhz radio receiver board (see below).
+## **Upgrading from Older Versions**
 
-Any messages received by the radio is decoded and sent to an MQTT broker (copies are also saved to local log files). Additionally, the script subscribes to an MQTT topic for local user commands, which are appropriate encoded and sent out over the evohome radio network directly as if they orginated from a Honeywell evohome device. 
+There has been extensive refactoring and reorganisation of evoGateway since the previous version 3.x. Users upgrading from earlier releases should be aware of several important changes:
 
-In effect, with this script/hardware, one can have **local** control over evohome - e.g. with a home automation solution such as [openHAB](https://www.openhab.org/) - without needing to go via Honeywell's cloud API. 
+### **1. Project Structure**
 
-
-## Installation
-
-The script requires python (preferabley version 3.8) and the following modules:
-
-* colorama
-* paho_MQTT
-* ramses_rf
-
-These can be installed by running ` pip install -r requirements.txt`).
-
-Note that this script has only been tested on an Ubuntu 20.04 server running in a VM, with python 3.8.0. 
-
-
-### Configuration
-Configuration parameters are defined in a separate file, `evogateway.cfg`, with the format and parmaeters as given below. The only mandatory parameter is the `COM_PORT`. All others are optional (obviously without the MQTT broker details, nothing will be posted to an MQTT broker!):
-
-    [Serial Port]
-    # Serial port is mandatory
-    COM_PORT         = /dev/ttyUSB0
-
-    # Optional
-    COM_BAUD         = 115200
-
-    [Files]
-    # The following are optional
-    EVENTS_FILE                 = gw_events.log
-    PACKET_LOG_FILE             = gw_packets.log
-    DEVICES_FILE                = devices.json
-    SCHEMA_FILE                 = ramses_rf_schema.json
-    MAX_SAVE_FILE_COUNT         = 9
-
-    [MQTT]
-    MQTT_SERVER                 = x.x.x.x
-    MQTT_USER                   = userid
-    MQTT_PW                     = password
-
-    MQTT_PUB_TOPIC              = evohome/evogateway
-    MQTT_SUB_TOPIC              = evohome/evogateway/_zone_independent/command    
-    MQTT_CLIENTID               = evoGateway
-
-    #Publish as a single json string. If False, the key/values of the json will be published individually
-    MQTT_PUB_AS_JSON            = False
-
-    # Either group published messages by zone name (default), otherwise by device name
-    MQTT_GROUP_BY_ZONE          = True
-
-    [MISC]
-    # optional
-    THIS_GATEWAY_NAME           = evoGateway
-
-    # Display full json string from evohome_rf, or just key data item for each row 
-    DISPLAY_FULL_JSON            = False
-
-## Using evoGateway
-
-In contrast to earlier versions, the script is now almost fully automated in the way it discovers devices, and gets zone names directly from the controller etc (another of the benefits of the ramses_rf library!). 
-
-The first time the script is run, it will run in the ramses_rf 'eavesdrop' mode, whereby it will attempt to listen in on the radio communications between the evohome devices  on the network, and build an internal schema of all the available devices, their types and parameters (e.g. zone names, valid temperature ranges etc). This should be left to run for a reasonable amount of time, to ensure that it has picked up communications from all the devices. Some devices, such as the DHW wireless sender, can in some instances take up to an hour before sending a message.
-
-A list of currently found devices can be seen at any time by sending a `POST_SCHEMA` command (see below) to the subscribed MQTT channel. This will post the current 'schema', including a list of the devices and zones names detected so far etc, to the `evohome/evogateway/_zone_independent/_gateway_config` MQTT topic. On *exiting* the system, a copy of the internal schema is then saved to a file (default `ramses_rf_schema`), and loaded back during subsequent runs of the script. This file should not normally need to be manually edited (previous versions are overwritten with the current version). 
-
-Additionally, a `devices.json` file is also saved. This file is a simple json dictionary of the device IDs detected along with a default device name based on its zone name (if the zone name is available at the time the file is saved). This file *can* be edited manually. Incorrect devices (i.e. those misinterpreted during the 'eavesdrop' or those from neighbours etc) should be removed. Device names can also be changed here and will be used for the MQTT topic instead of the device id. 
-
-Note that the IDs in this `devices.json` forms the `allowed_list` - i.e. only messages from devices itemised in this file will be processed in future.
-
-The devices (and schema) files can also be force saved at any time by sending the command `SAVE_SCHEMA`.
-
-Similarly, eavesdropping mode can be re-initiated by deleting the `devices.json` and the `ramses_rf_schema` files.
-
-
-### Sending Commands to the evohome Controller
-The gateway script subsribes to a specific MQTT topic (by default `evohome/evogateway/_zone_independent/command`) for user commands to be sent out over the evohome radio network. 
-
-JSON messages to this topic are picked up by the script, processed and converted into the format required by evohome, and then transmitted to the appropriate device. For this process, the gateway script in-effect pretends to be an Honeywell HGI80 device, with a device ID starting with `18:` (the ID is fixed in the arduino firware).
-
-For users coming from earlier versions, it should be noted that the content of the JSON message to send commands has signficantly changed, to keep aligned with the underlying ramses_rf library. The new format of the JSON send command message is as follows:
+The codebase is now organised into distinct functional components, moving away from the single large script file. This should make it easier to adapt to any future changes in the underlying `ramses_rf` library:
 
 ```
-{"command": "<command method>", "<keyword 1>" : "<keyword 1 value>", "<keyword 2>" : "<keyword 2 value>"...}
+.
+├── config/
+│   ├── evogateway.cfg
+│   ├── ramses_rf_schema.json
+│
+├── evogateway/
+│   ├── app.py
+│   ├── config.py
+│   ├── logger.py
+│   ├── router.py
+│   ├── services.py
+│   └── utils.py
+│
+├── logs/
+│   ├── events.log
+│   └── packet.log
+│
+├── README.md
+└── evogateway.py
 ```
 
-<command method> and the corresponding keyword parameters follow the ramses_rf command constructor methods (as defined within its [Command class](https://github.com/zxdavb/ramses_rf/blob/aa5f55ae63adb2750b783308a8690b82657a5f35/ramses_rf/command.py#L291)). As of the 20 May 2021, the following constructor methods are available, along with their respective list of keyword arguments (note that not all the arguments are mandatory):
+### **2. The Ramses schema file is now the single source of truth**
+
+* The `ramses_rf_schema.json` file is now the master source for zones/devices.
+* **`devices.json` and `zones.json` have been removed**.
+  Device names, zone names, and relationships are now maintained entirely in the schema file.
+
+### **3. MQTT topic structure has been updated**
+
+* A more consistent and hierarchical MQTT layout is now used by default.
+* The previous flat/legacy layout is still available by enabling:
+
+  ```
+  MQTT_LEGACY_TOPIC_STRUCTURE = True
+  ```
+* Device and zone categorisation defaults have changed slightly, especially around controllers, HGI devices, and DHW classification.
+
+### **4. Some configuration file options have changed**
+
+* Several older parameters have been renamed or removed.
+* A complete sample configuration file is provided (`config/evogateway.cfg.sample`).
+
+### **5. Code modularisation**
+
+* The old single-file architecture has been replaced with a module-based structure.
+* Logging, MQTT handling, routing, serial handling, and formatting logic now live in dedicated modules.
+
+While core functionality should hopefully remain consistent with previous versions, some behaviour will almost certainly differ slightly as compared to previous versions. 
+
+---
+
+## **Installation**
+
+### **Requirements**
+
+* Python **3.12.3**
+* Python dependencies can be installed via:
+
+```bash
+pip install -r requirements.txt
+```
+
+Includes:
+
+* `ramses_rf`
+* `paho-mqtt`
+* `colorama`
+
+---
+### **Hardware**
+**NOTE** The hardware can be purchased in component form from ebay/Ali Express etc or, fully assembled with a proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`).
+
+If assembling yourself, you will need:
+
+* **1 x Arduino nano** (clone should be fine), preferably with FTDI usb chipset, though the cheaper CH341 chipset also worked. The only issue I had with the CH341 was that the USB port was not always cleanly released when the python script exited. My FTDI based build is much more reliable in this respect.
+
+* **1 x CC1101 radio, 868MHz**, e.g. something like [this](https://quadmeup.com/cc1101-868mhz-wireless-transciever-pinout). However, note that there has been some report of issues with the radio crystal's accuracy on some of these boards ([discussion on evofw3 board](https://github.com/ghoti57/evofw3/issues/11#issuecomment-823484744)).
+
+* **A breadboard** or **8 x Dupont fly leads**. If using fly leads you need to ensure that sure that you have the correct male/female combination for your arduino and CC1101 card. 
+
+![alt text](./misc/images/arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
+
+
+Wiring pin connections will depend on the specific CC1101 board. In my case, I used the following:
+```
+WIRE COLOUR			CC1101 PIN 	NANO PIN
+Red 				Vcc	        3.3V pin
+Black 				GND 		GND
+Orange 				MOSI		15
+Yellow 				SCLK		17
+Blue				MISO		16
+Dark Red 			GDO2		32
+Grey				GDO0 		1
+White 				CSN 		14
+
+ANT 				Antenna coil
+```
+
+Although arduinos with the FTDI FT232L chipset are recommended, clone nanos with the CH341 usb chip have also worked reasonably. In my case the radio board is connected directly to the nano using just male/female dupont wires, with the male side soldered directly onto the radio board. Note that actual pin connection points should always follow the requirements of evofw3 (e.g. see the [atm328_pins.h](https://github.com/ghoti57/evofw3/blob/36b7a9ca1d97fc0f81ffaea1e8e8b3c780024cd6/atm328_pins.h) file), otherwise corresponding changes may need to be made in in this file before compiling and flashing the firmware.
+
+### Arduino Firmware
+evoGateway requires the **[evofw3](https://github.com/ghoti57/evofw3)** arduino firmware by @ghoti57, to decode/encode the radio signals and make the message packets available to/from the ramses_rf framework. 
+
+
+---
+
+## Configuration
+
+evoGateway uses two distinct configuration sources, each serving a different purpose:
+
+1. **The evoGateway configuration file** (`evogateway.cfg`)
+   * Contains all runtime settings for the gateway itself (serial port, MQTT behaviour, logging, file paths, etc.).   
+
+2. **The Ramses RF schema file** (`ramses_rf_schema.json`)
+   * Stores the discovered evohome network structure (devices, zones, controller relationships, metadata, etc.).
+   * Automatically generated by evoGateway on first run, and can be modified by hand as required.
+
+Both files live under the `config/` directory.
+
+_(For those upgrading from an earlier version, the previous `devices.json` and `zones.json` files have been retired; the schema file is now the single authoritative source.)_
+
+---
+
+### 1. evoGateway Configuration File (`evogateway.cfg`)
+
+This file defines the operational parameters for evoGateway. A sample configuration with all available parameters is provided in:
+
+```
+config/evogateway_sample.cfg
+```
+
+Users should copy this to `evogateway.cfg` and adjust as needed. The key parameters to include are the serial port settings and the mqtt broker details. The rest are optional and can be omitted.
+
+#### **Serial Port Settings**
+
+Controls communication with the evofw3 Arduino interface:
+
+* `COM_PORT` (mandatory)
+* `COM_BAUD`
+
+The `COM_PORT`parameter can take any format that `ramses_rf` supports, such as:
+* /dev/ttyUSB0
+* /dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0 
+* mqtt://username:password@172.16.1.200:1883
+
+
+#### **MQTT Settings**
+
+Broker credentials, topic definitions, and publishing behaviour:
+
+* MQTT server, username, password
+* Topic roots and subtopics
+* JSON-only vs. JSON+key/value publishing
+* Zone grouping or device-flat layout
+* Legacy topic compatibility mode
+
+
+
+---
+
+### 2. Ramses RF Schema (`ramses_rf_schema.json`)
+
+The ramses schema file is the **authoritative record of the evohome system** as 'discovered' by the `ramses_rf` framework by listening in on the RF network.
+
+It contains structured data on:
+
+* All devices observed on the network
+* Device types and capabilities
+* Zones and zone data
+* Controller identity
+* Temperature ranges, supported features, flow configuration
+* A `known_list` of devices that are permitted to operate via the ramses framework
+
+#### **Schema Creation and Updates**
+
+* On first run (or if there is no valid schema file, or if the `ENABLE_DISCOVERY` config parameter is explicitly set to `True`), evoGateway begins in both **discovery mode + eavesdrop mode**, to build the schema incrementally from RF traffic.
+
+* During discovery, the evolving schema is published regularly to MQTT.
+
+* Once sufficient information is collected (this may may take some time to build up, especially if there are any ufh controllers or DHW senders on the network), the schema can be saved either manually via an MQTT command or automatically at system shutdown. The default save location is `config/ramses_rf_schema.json`. 
+  
+* On subsequent runs, evoGateway loads this file if available, avoiding repeated discovery (which can be very resource intensive). 
+* Note that if evoGateway is started with a valid schema file, it will NOT normally re-save the current schema at system shutdown, in order to avoid overwriting any custom modifications in the startup schema. This behaviour can be changed by setting the configuration parameter `ALWAYS_SAVE_SCHEMA_ON_SHUTDOWN` to `True`.
+
+
+#### Schema Support Commands
+
+Two administrative commands (sent via the MQTT command topic) control schema publishing and persistence:
+
+| Command       | Description                                                              |
+| ------------- | ------------------------------------------------------------------------ |
+| `POST_SCHEMA` | Publishes the current schema over MQTT to the `_gateway_config` subtree. |
+| `SAVE_SCHEMA` | Publishes the schema *and* writes it back to the JSON file on disk.      |
+
+
+
+#### Editing the Schema
+
+Although it is not normally necessary to modify this file manually, initially it may be easier to add device aliases directly in this file, and/or amend the `known_list`, as these do not seem to always come through from the automatic discovery. 
+
+The schema file can subsequently be regenerated from scratch at any time by either:
+1. Deleting the current schema and then starting evoGateway
+2. Setting the `ENABLE_DISCOVERY` to `True` in the `Ramses_rf` section of the evoGateway config file.
+
+---
+
+## **Operation**
+
+Once installed and configured, evoGateway:
+
+1. Loads the existing `ramses_rf` schema
+2. Opens the serial connection to the hardware
+3. Starts listening to all evohome RF traffic
+4. Publishes decoded messages to MQTT
+5. Subscribes to a command topic and transmits valid commands onto the RF network
+6. Maintains logs of all events and packets
+
+### **Schema Handling**
+
+* When operating in eavesdropping or discovery mode, the current schema is saved on clean shutdown.
+* The schema can also be manually posted to MQTT or saved to file at any time via system MQTT commands.
+
+---
+
+## **MQTT Topic Structure**
+
+evoGateway's MQTT topic structure has been slightly changed from earlier versions, to provide a slightly cleaner and more consistent hierarchy. The key changes are:
+
+* Devices that previously appeared under `"_zone_independent"` now appear under a dedicated **`system/`** topic.
+* All zones are now grouped under a single **`zones/`** root topic.
+* Hot water (DHW) is treated as just another zone under `zones`.
+* Device categories such as **controllers**, **HGI**, **relays**, **UFH**, **OTB** etc remain available and behave largely as before, but are now placed cleanly within the new hierarchy.
+
+### **Legacy Structure**
+
+Users upgrading from older evoGateway installations who prefer the original topic layout for continuity can try the configuration setting `MQTT_LEGACY_TOPIC_STRUCTURE = True`. In this mode:
+
+* The old `"_zone_independent"` root is restored.
+* Zones appear directly under the root topic. No structural `zones/` grouping is applied.
+* Controllers and HGIs are *not* separated into their own buckets.
+
+
+## **MQTT Command Interface**
+
+evoGateway listens for **commands** on a designated MQTT topic and sends them onto the RF network (via the ramses library) as if they originated from a Honeywell HGI80.
+
+The default command topic is `evohome/evogateway/system/_command` but this can be changed as required in the config file:
+
+```ini
+[MQTT]
+MQTT_CMD_TOPIC = evohome/evogateway/system/_command
+```
+
+### 1. Command Message Format
+
+Commands are sent as **JSON objects** to the command topic.
+
+There are two supported styles:
+
+1. **High-level “command” calls** (preferred) – map directly onto `ramses_rf` command constructors.
+2. **Low-level “code” packets** – send raw RAMSES frames (for advanced use only).
+
+Both use a single JSON document, for example:
+
+```json
+{"command": "set_zone_setpoint", "zone_idx": "01", "setpoint": 21.0}
+```
+
+or
+
+```json
+{"code": "2309", "verb": "W", "payload": "00072100"}
+```
+
+---
+
+### 2. High-Level ramses_rf Commands (Recommended)
+
+The preferred approach is to use the high-level `command` interface, which wraps the `ramses_rf` `Command` constructors. These can be found in the `ramses_rf` repo.
+
+#### Structure
+
+```json
+{
+  "command": "<method_name>",
+  "<keyword_1>": "<value>",
+  "<keyword_2>": "<value>",
+  ...
+}
+```
+
+* `command`
+  Name of the `ramses_rf` command method (e.g. `set_zone_setpoint`, `get_system_time`, `set_dhw_mode`, etc.) 
+
+* Additional keys
+  Passed through as keyword arguments to that method (e.g. `zone_idx`, `setpoint`, `until`, `ctl_id`).
+
+If `ctl_id` (controller ID) is omitted, evoGateway will attempt to automatically insert the ID of the controller discovered from the Ramses schema.
+
+#### Examples
+
+**a) Get the system time**
+
+```json
+{"command": "get_system_time"}
+```
+
+**b) Set a zone setpoint**
+
+Set *Zone 01* to 21.0 °C indefinitely:
+
+```json
+{"command": "set_zone_setpoint", "zone_idx": "01", "setpoint": 21.0}
+```
+
+**c) Set DHW mode until a given time**
+
+```json
+{
+  "command": "set_dhw_mode",
+  "active": true,
+  "until": "2025-05-31T17:40:00"
+}
+```
+
+Date/time values should be in ISO-8601 format (`YYYY-MM-DDTHH:MM:SS`).
+
+**Note:** The available `command` names and their parameters are defined by `ramses_rf` within its [Command class](https://github.com/zxdavb/ramses_rf/blob/aa5f55ae63adb2750b783308a8690b82657a5f35/ramses_rf/command.py#L291). The gateway does not add or remove arguments; it simply passes them through as given. 
+  
+As of November 2025, the following constructor methods are available, along with their respective list of keyword arguments (note that not all the arguments are mandatory):
 
 ```
 Code 1F41, command method:  get_dhw_mode(ctl_id)
@@ -128,102 +384,142 @@ Code 000A, command method:  set_zone_config(ctl_id, zone_idx, min_temp, max_temp
 Code 2349, command method:  set_zone_mode(ctl_id, zone_idx, mode, setpoint, until)
 Code 0004, command method:  set_zone_name(ctl_id, zone_idx, name)
 Code 2309, command method:  set_zone_setpoint(ctl_id, zone_idx, setpoint)
+Code 0404, command method:  get_zone_schedule_fragment  ctl_id, zone_idx, frag_idx, frag_cnt
 ```
 
-The controller ID keyword `ctl_id` is optional and if not provided in the JSON message, will default to the internal one (i.e. from the eavesdropped schema). 
+---
 
-An example JSON MQTT message for getting the first system log entry from the Controller would thus be:
+### 3. Low-Level Code / Verb / Payload Commands (Advanced)
+
+For advanced scenarios or when experimenting with undocumented features, you can send raw RAMSES frames.
+
+#### Structure
 
 ```json
-{"command" : "get_system_log_entry", "log_idx": 0}
-
+{
+  "code": "XXXX",
+  "verb": "RQ|RP|W|I",
+  "payload": "AABBCC...",
+  "dest_id": "01:234567"    // optional
+}
 ```
 
-Date/time values should be sent in the in the usual iso format, e.g. to turn the hot water one until 17:40 on 31st May 2021:
+* `code` – 4-character RAMSES message code (e.g. `0418`, `2309`).
+* `verb` – RAMSES verb (`RQ`, `RP`, `W`, ` I`, etc.).
+* `payload` – **hex string** payload (exactly as required by that code).
+* `dest_id` – optional destination device ID. If omitted, the controller is usually assumed.
+
+**Example – get first system log entry using raw code:**
 
 ```json
-{"command" : "set_dhw_mode", "active": true, "until" : "2021-05-31T17:40:00"}
+{"code": "0418", "verb": "RQ", "payload": "000000"}
 ```
 
-In addition to using the built-in ramses_rf command constructors, a command `code` can still be sent but again the message structure has been changed to keep aligned with the ramses_rf framework. When sending a command `code`, both `verb` and `payload` must also be included, where `verb` is usually RQ, RP, W etc. and `payload` is the **hex** payload that for the given command code. Optionally `dest_id` may be specified with the ID of the recipient device, if the command is not being sent to the controller (default).
+Use this mode only if you are familiar with the RAMSES protocol; the gateway performs minimal validation.
 
-An equivalent example for getting the 1st system log entry but using the command code would be:
+---
+
+### 4. Schedule Commands
+
+evoGateway exposes a simple schedule interface over the same command topic for complete local control of the evohome schedule, via the following commands:
+
+* `get_schedule`
+* `set_schedule`
+
+#### Get Schedule
 
 ```json
-{"code" : "0418", "verb": "RQ", "payload": "000000"}
+{
+  "command": "get_schedule",
+  "zone_idx": "01",
+  "force_refresh": true
+}
 ```
 
-Status updates for commands sent via the evohome network are posted to the topic `evohome/evogateway/_zone_independent/command/_last_command/status`. 
+* `zone_idx` – required; the zone index as a hexadecimal string (e.g. `"01"`, `"0A"`, `"HW"`).
+* `force_refresh` – optional; if `true`, retrieves a fresh schedule from the controller.
 
-Finally, there are a few 'system' commands available for use whilst evoGateway is running. These are called by sending `sys_config` values (instead of the previous `command` and `code`). Currently available commands are:
-* POST_SCHEMA - this posts the current  schema, devices etc etc
-* SAVE_SCHEMA - this posts the current  schema, devices etc etc, AND saves them to files
-* DISPLAY_FULL_JSON  - switches between the 'simple' display of evoGateway versus the detailed json output from ramses_rf. Note that this is for onscreen display only; log files still contain the full json data.
+Schedules are returned via normal RF messages and published to MQTT as `zone_schedule` payloads under the relevant zone/device topics.
 
+#### Set Schedule
 
-## Hardware
-**NOTE** The hardware can be purchased fully assembled, including proper PCB, from ebay (search for `nanoCUL FTDI 868MHz`), or in component form from ebay/Ali Express etc.
-
-If assembling yourself, you will need:
-
-* **1 x Arduino nano** (clone should be fine), preferably with FTDI usb chipset, though the cheaper CH341 chipset also worked. The only issue I had with the CH341 was that the USB port was not always cleanly released when the python script exited. My FTDI based build is much more reliable in this respect.
-
-* **1 x CC1101 radio, 868MHz**, e.g. something like [this](https://quadmeup.com/cc1101-868mhz-wireless-transciever-pinout). However, note that there has been some report of issues with the radio crystal's accuracy on some of these boards ([discussion on evofw3 board](https://github.com/ghoti57/evofw3/issues/11#issuecomment-823484744)).
-
-* **A breadboard** or **8 x Dupont fly leads**. If using fly leads you need to ensure that sure that you have the correct male/female combination for your arduino and CC1101 card.
-
-
-
-![alt text](./arduino-cc1101.jpeg "Arduino/CC1101 Hardware")
-
-Wiring pin connections will depend on the specific CC1101 board. In my case, I used the following:
-```
-WIRE COLOUR			CC1101 PIN 	NANO PIN
-Red 				Vcc	        3.3V pin
-Black 				GND 		GND
-Orange 				MOSI		15
-Yellow 				SCLK		17
-Blue				MISO		16
-Dark Red 			GDO2		32
-Grey				GDO0 		1
-White 				CSN 		14
-
-ANT 				Antenna coil
+```json
+{
+  "command": "set_schedule",
+  "zone_idx": "01",
+  "schedule": { ... }
+}
 ```
 
-Although arduinos with the FTDI FT232L chipset are recommended, clone nanos with the CH341 usb chip have also worked reasonably. In my case the radio board is connected directly to the nano using just male/female dupont wires, with the male side soldered directly onto the radio board. Note that actual pin connection points should always follow the requirements of evofw3 (e.g. see the [atm328_pins.h](https://github.com/ghoti57/evofw3/blob/36b7a9ca1d97fc0f81ffaea1e8e8b3c780024cd6/atm328_pins.h) file), otherwise corresponding changes may need to be made in in this file before compiling and flashing the firmware.
+* `schedule` must match the structure expected by `ramses_rf` for zone schedules. Initially downloading a schedule via the `get_schedule` command provides an easy template to work from.
+* Schedules should be sent as complete schedules for the whole work. Uploading a schedule will overwrite the whole of the existing schedule stored in the evohome controller
 
-### Arduino Firmware
-evoGateway requires the **[evofw3](https://github.com/ghoti57/evofw3)** arduino firmware by @ghoti57, to decode/encode the radio signals and make the message packets available to/from the ramses_rf framework. 
+If required parameters (e.g. `zone_idx` or `schedule`) are missing, the gateway will log an error and ignore the command.
 
+---
 
-### Credits
-evoGateway is based substantially around the `ramses_rf` python framework library written and maintained by David Bonnes (@zxdavb) - https://github.com/zxdavb/ramses_rf, and of course credit to Peter Price (@ghoti57) for his **[evofw3](https://github.com/ghoti57/evofw3)** firmware for the arduinio, without which none of this would be possible!
+### 5. Command Status & Diagnostics
 
-(Older pre-version 3 of this script was based on the Domitcz source, specifically the `evohomeRadio.cpp` file, by *fulltalgoRythm* - https://github.com/domoticz/domoticz/blob/development/hardware/evohomeRadio.cpp). 
+Each command sent via MQTT is tracked and a status is published to the `_last_command` subtopic beneath the command root.
 
-Also see http://www.automatedhome.co.uk/vbulletin/showthread.php?5085-My-HGI80-equivalent-Domoticz-setup-without-HGI80 for info and discussions on homebrew hardware options.
+By default:
 
+* Commands are sent to:
 
+  ```text
+  <MQTT_CMD_TOPIC>/_commands
+  ```
 
+* Status is published under:
 
-## Pre-Version 3 History
+  ```text
+  <MQTT_CMD_TOPIC>/_last_command/status
+  ```
 
-**Update 28/08/2019** Added auto-retry for failed sending of commands; added send command status updates to MQTT topic; added custom send commands capability.
+The status payload typically includes:
 
-**Update 25/5/2019** "Sending" functionality added; some refactoring and bug fixes; README updated accordingly.
+* Whether the command was **transmitted** onto the RF network.
+* Whether an expected **acknowledgement / response** was successfully received.
+* Any relevant error or timeout information.
 
-**Update 18/1/2020** Updated README to include HCC80R zone definition 
+This allows for automations to:
 
-**Update 25/2/2020** Added OpenTherm decoding
+* Wait for confirmation that a command was accepted.
+* Detect failed or timed-out operations.
+* etc.
 
-**Update 03/3/2020** Added decoding of controller fault log messages (note `device_info` has been changed to `fault_log`)
-                     Added support for overriding sent message acknowledgements
+---
 
-**Update 06/4/2020** Added support for newer firmwares, such as evofw3, which include RSSI
+### 6. System Commands
 
-**Update 09/6/2020** BREAKING CHANGE - Migrated to python 3 (as python 2 is EOL)
+In addition to “normal” `ramses_rf` commands, evoGateway also accepts a few **gateway maintenance commands** via the same MQTT command topic.
 
-**Update 18/10/2020** Fix "zoneId" error. Merge enhancements by @number42net (MQTT reconnect, UTC datetime)
+These use a `sys_config` key instead of `command`:
 
+```json
+{"sys_config": "POST_SCHEMA"}
+```
 
+Currently supported (subject to change as the gateway evolves):
+
+* `POST_SCHEMA`
+  Publishes the current schema, parameters, and status from `ramses_rf` to the `_gateway_config` subtree under the system topic.
+
+* `SAVE_SCHEMA`
+  As above, and additionally saves the current schema back to the `ramses_rf_schema.json` file.
+
+These operations are of course local to evoGateway and are not forwarded on the RF network.
+
+---
+
+## **Credits**
+
+evoGateway builds upon two major open-source contributions:
+
+* **`ramses_rf`** by David Bonnes (@zxdavb)
+  [https://github.com/zxdavb/ramses_rf](https://github.com/zxdavb/ramses_rf)
+
+* **`evofw3`** by Peter Price (@ghoti57)
+  [https://github.com/ghoti57/evofw3](https://github.com/ghoti57/evofw3)
+
+Their work provides the foundation for all decoding, encoding, and RF communication.

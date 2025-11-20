@@ -1,16 +1,46 @@
-*log
-*log.*
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Logs and bakckup files
+logs/
+*.log
 *.old.*
 bak_*
 old_*
-*.pyc
+
+# Config and schema - ignore real ones, track samples
+/config/*
+!/config/*.sample
+
+# Ignore global config formats
 *.cfg
 *.json
 *.json.*
 *.bak
+
+# Allow tracking of scripts
+!/config
+!/evogateway/
+
+# Executables, services, scripts
 *.sh
-*_
 *.service
+
+# Temporary folders
+/tmp/
+/bak/
+/log/
+
+# Optional: ignore ramses_rf (local dev copy)
 ramses_rf/
-tmp/
-bak/
+
+# OS junk
+.DS_Store
+.Trashes
+Thumbs.db
+
+# VS Code
+.vscode/

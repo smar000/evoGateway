@@ -1,0 +1,148 @@
+#------------------------------------------------------------------------------
+# evoGateway – Example Configuration File
+#
+# This file contains ALL supported configuration parameters defined in config.py
+# with clear comments explaining what each setting does.
+#
+# Copy this file to:   config/evogateway.cfg
+#------------------------------------------------------------------------------
+
+
+#------------------------------------------------------------------------------
+# SERIAL PORT SETTINGS
+#------------------------------------------------------------------------------
+[Serial Port]
+
+# Serial device where your HGI is connected
+COM_PORT = /dev/ttyUSB0
+
+# Baud rate for UART communication
+COM_BAUD = 115200
+
+
+
+#------------------------------------------------------------------------------
+# FILE & LOGGING SETTINGS
+#------------------------------------------------------------------------------
+[Files]
+
+# Log of high-level events (schemas saved, MQTT commands, etc.)
+EVENTS_FILE = events.log
+
+# Log of raw packets from ramses_rf
+PACKET_LOG_FILE = packet.log
+
+# Number of rotated logs to keep
+LOG_FILE_ROTATE_COUNT = 9
+
+# Rotate packet.log when this many bytes are reached
+LOG_FILE_ROTATE_BYTES = 1000000
+
+# RamsesRF schema file (auto-generated / updated by the gateway)
+SCHEMA_FILE = ramses_rf_schema.json
+
+# Save schema at every shutdown (default is to save on shutdown only when in discovery mode)
+ALWAYS_SAVE_SCHEMA_ON_SHUTDOWN = False
+
+# Maximum number of schema snapshots to keep
+MAX_SAVE_FILE_COUNT = 9
+
+
+
+#------------------------------------------------------------------------------
+# MQTT SETTINGS
+#------------------------------------------------------------------------------
+[MQTT]
+
+# MQTT broker hostname or IP
+MQTT_SERVER = 192.168.1.10
+
+# Auth (leave blank if no authentication required)
+MQTT_USER =
+MQTT_PW   =
+
+# MQTT client ID presented to the broker
+MQTT_CLIENTID = evoGateway
+
+# Publish ONLY full JSON messages (no key/value breakdown)
+MQTT_PUB_AS_JSON = False
+
+# Publish both JSON and individual key/value pairs
+# NOTE: If = True, JSON-only mode is automatically forced off
+MQTT_PUB_KV_WITH_JSON = True
+
+# Whether to group messages by zone
+#   True  →   zones/kitchen/...
+#   False →   <device>/msg_code
+MQTT_GROUP_BY_ZONE = True
+
+# Use legacy topic layout (pre-v4 format)
+MQTT_LEGACY_TOPIC_STRUCTURE = False
+
+# ROOT topic for all MQTT output
+MQTT_ROOT_TOPIC = evohome/mygateway
+
+# Topic for commands sent TO evoGateway - this is always relative to the root topic
+MQTT_CMD_TOPIC = system/_command
+
+# Legacy-only topics
+MQTT_SYSTEM_SUBTOPIC = system
+MQTT_ZONE_UNKNOWN_SUBTOPIC = _zone_unknown
+MQTT_ZONES_SUBTOPIC = zones
+MQTT_CONTROLLERS_SUBTOPIC = controllers
+MQTT_RELAYS_SUBTOPIC = relays
+
+# DHW handling
+# If True, DHW is treated as a "zone" (recommended)
+MQTT_DHW_IS_ZONE = True
+
+# Subtopic for DHW
+MQTT_DHW_ZONE_SUBTOPIC = _dhw
+
+
+
+#------------------------------------------------------------------------------
+# RAMSES_RF ENGINE SETTINGS
+#------------------------------------------------------------------------------
+[Ramses_rf]
+
+# Disable radio sending entirely (monitor-only mode)
+DISABLE_SENDING = False
+
+# Enable device discovery (recommend disabled)
+ENABLE_DISCOVERY = False
+
+# Enable eavesdropping mode (deep discovery, more noise - recommend disabled for production)
+ENABLE_EAVESDROP = False
+
+# Use a known-list of devices only (recommended)
+KNOWN_LIST = True
+
+
+
+#------------------------------------------------------------------------------
+# MISCELLANEOUS SETTINGS
+#------------------------------------------------------------------------------
+[Misc]
+
+# Friendly name for your gateway/HGI 
+THIS_GATEWAY_NAME = evoGateway
+
+# Width of formatted console rows
+MIN_ROW_LENGTH = 160
+
+# Force the gateway to only use a single HGI device (safety)
+FORCE_SINGLE_HGI = True
+
+# Console colours (Python dict expression)
+# Leave blank to use defaults
+DISPLAY_COLOURS =
+
+# Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+LOG_LEVEL = INFO
+
+# Print events to the console
+EVENTS_CONSOLE_OUTPUT = False
+
+# Log events with friendly device names (recommended)
+EVENTS_LOG_WITH_DEVICE_NAMES = True
