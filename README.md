@@ -360,34 +360,62 @@ Date/time values should be in ISO-8601 format (`YYYY-MM-DDTHH:MM:SS`).
 
 **Note:** The available `command` names and their parameters are defined by `ramses_rf` within its [Command class](https://github.com/zxdavb/ramses_rf/blob/aa5f55ae63adb2750b783308a8690b82657a5f35/ramses_rf/command.py#L291). The gateway does not add or remove arguments; it simply passes them through as given. 
   
-As of November 2025, the following constructor methods are available, along with their respective list of keyword arguments (note that not all the arguments are mandatory):
+As of November 2025, the following constructor methods appear to be available, along with their respective list of keyword arguments (note that not all the arguments are mandatory):
+<details>
+<summary><strong>Click to expand list of commands</strong></summary>
 
 ```
-Code 1F41, command method:  get_dhw_mode(ctl_id)
-Code 0404, command method:  get_dhw_schedule_fragment(ctl_id, frag_idx, frag_cnt)
-Code 3220, command method:  get_opentherm_data(dev_id, msg_id)
-Code 0418, command method:  get_system_log_entry(ctl_id, log_idx)
-Code 2E04, command method:  get_system_mode(ctl_id)
-Code 313F, command method:  get_system_time(ctl_id)
-Code 1100, command method:  get_tpi_params(ctl_id)
-Code 000A, command method:  get_zone_config(ctl_id, zone_idx)
-Code 2349, command method:  get_zone_mode(ctl_id, zone_idx)
-Code 0004, command method:  get_zone_name(ctl_id, zone_idx)
-Code 0404, command method:  get_zone_schedule_fragment(ctl_id, zone_idx, frag_idx, frag_cnt)
-Code 1F41, command method:  set_dhw_mode(ctl_id, mode, active, until)
-Code 10A0, command method:  set_dhw_params(ctl_id, setpoint, overrun, differential)
-Code 1030, command method:  set_mix_valve_params(ctl_id, zone_idx, max_flow_setpoint, min_flow_setpoint, valve_run_time, pump_run_time)
-Code 2E04, command method:  set_system_mode(ctl_id, system_mode, until)
-Code 313F, command method:  set_system_time(ctl_id, datetime)
-Code 1100, command method:  set_tpi_params(ctl_id, domain_id, cycle_rate, min_on_time, min_off_time, proportional_band_width)
-Code 000A, command method:  set_zone_config(ctl_id, zone_idx, min_temp, max_temp, local_override, openwindow_function, multiroom_mode)
-Code 2349, command method:  set_zone_mode(ctl_id, zone_idx, mode, setpoint, until)
-Code 0004, command method:  set_zone_name(ctl_id, zone_idx, name)
-Code 2309, command method:  set_zone_setpoint(ctl_id, zone_idx, setpoint)
-Code 0404, command method:  get_zone_schedule_fragment  ctl_id, zone_idx, frag_idx, frag_cnt
-```
+Method                  |Verb| Code    | Arguments
+------------------------| ---| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+put_weather_temp        | I  | 0002    | dev_id, temperature
+get_zone_name           | RQ | 0004    | ctl_id, zone_idx
+set_zone_name           | W  | 0004    | ctl_id, zone_idx, name
+get_schedule_version    | RQ | 0006    | ctl_id
+get_relay_demand        | RQ | 0008    | dev_id, zone_idx|None
+get_zone_config         | RQ | 000A    | ctl_id, zone_idx
+set_zone_config         | W  | 000A    | ctl_id, zone_idx, min_temp = 5, max_temp = 35, local_override = False, openwindow_function = False, multiroom_mode = False
+get_system_language     | RQ | 0100    | ctl_id 
+get_schedule_fragment   | RQ | 0404    | ctl_id, zone_idx, frag_number, total_frags|None
+set_schedule_fragment   | W  | 0404    | ctl_id, zone_idx, frag_num, frag_cnt, fragment
+get_system_log_entry    | RQ | 0418    | ctl_id, log_idx
+get_mix_valve_params    | RQ | 1030    | ctl_id, zone_idx
+set_mix_valve_params    | W  | 1030    | ctl_id, zone_idx, max_flow_setpoint, min_flow_setpoint, valve_run_time, pump_run_time
+get_dhw_params          | RQ | 10A0    | ctl_id
+set_dhw_params          | W  | 10A0    | ctl_id, setpoint|None, overrun|None, differential|None
+get_tpi_params          | RQ | 1100    | dev_id, domain_id|None
+set_tpi_params          | W  | 1100    | ctl_id, domain_id|None, cycle_rate = 3, min_on_time = 5, min_off_time = 5, proportional_band_width|None
+get_dhw_temp            | RQ | 1260    | ctl_id
+put_dhw_temp            | I  | 1260    | dev_id, temperature|None
+put_outdoor_temp        | I  | 1290    | dev_id, temperature|None
+put_co2_level           | I  | 1298    | dev_id, co2_level|None
+put_indoor_humidity     | I  | 12A0    | dev_id, indoor_humidity|None
+get_zone_window_state   | RQ | 12B0    | ctl_id, zone_idx
+get_dhw_mode            | RQ | 1F41    | ctl_id
+set_dhw_mode            | W  | 1F41    | ctl_id, mode|None, active|None, until|None, duration|None
+put_bind                | I/W| 1FC9    | verb: VerbT, src_id, codes: Code|Iterable[Code]|None, dst_id|None
+set_fan_mode            | I  | 22F1    | fan_id, fan_mode|None, seqn|None, src_id|None, idx = "00"
+set_bypass_position     | I/W| 22F7    | fan_id, bypass_position|None, src_id|None, **kwargs (bypass_mode: 'auto'|'on'|'off' optional)
+get_zone_setpoint       | W  | 2309    | ctl_id, zone_idx
+set_zone_setpoint       | W  | 2309    | ctl_id, zone_idx, setpoint
+get_zone_mode           | RQ | 2349    | ctl_id, zone_idx
+set_zone_mode           | W  | 2349    | ctl_id, zone_idx, mode|None, setpoint|None, until|None, duration|None
+set_fan_param           | W  | 2411    | fan_id, param_id, value|int|float|bool, src_id|None
+get_fan_param           | RQ | 2411    | fan_id, param_id, src_id
+get_system_mode         | RQ | 2E04    | ctl_id
+set_system_mode         | W  | 2E04    | ctl_id, system_mode|None, until|None
+put_presence_detected   | I  | 2E10    | dev_id, presence_detected|None
+get_zone_temp           | RQ | 30C9    | ctl_id, zone_idx
+put_sensor_temp         | I  | 30C9    | dev_id, temperature|None
+get_system_time         | RQ | 313F    | ctl_id
+set_system_time         | W  | 313F    | ctl_id, datetime, is_dst = False
+get_hvac_fan_31da       | I  | 31DA    | dev_id, hvac_id, bypass_position|None, air_quality|None, co2_level|None, indoor_humidity|None, outdoor_humidity|None, exhaust_temp|None, supply_temp|None, indoor_temp|None, outdoor_temp|None, speed_capabilities: list[str], fan_info, _unknown_fan_info_flags: list[int], exhaust_fan_speed|None, supply_fan_speed|None, remaining_mins|None, post_heat|None, pre_heat|None, supply_flow|None, exhaust_flow|None, **kwargs (air_quality_basis, _extra)
+get_opentherm_data      | RQ | 3220    | otb_id, msg_id
+put_actuator_state      | I  | 3EF0    | dev_id, modulation_level|None
+put_actuator_cycle      | RP | 3EF1    | src_id, dst_id, modulation_level, actuator_countdown, cycle_countdown|None
 
----
+```
+</details>
+
 
 ### 3. Low-Level Code / Verb / Payload Commands (Advanced)
 
