@@ -72,17 +72,20 @@ class MQTTService:
         self._loop = loop
         self.log = logger
 
-        self._client = mqtt.Client(client_id=self.client_id)
+        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.client_id)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
         self._client.on_message = self._on_message
 
         if self.user:
             self._client.username_pw_set(self.user, self.password)
+        
+        # Robust topic joining for Last Will
+        will_topic = "/".join(filter(None, [self.root_topic.strip("/"), self.status_subtopic.strip("/")]))
         self._client.will_set(
-            f"{self.root_topic}/{self.status_subtopic}",
+            will_topic,
             payload=json.dumps(self.format_status_payload(MQTT_OFFLINE), indent=4),
-            qos=0,
+            qos=1,
             retain=True,
         )
 
@@ -104,15 +107,17 @@ class MQTTService:
         except Exception:
             pass
 
-    def _on_connect(self, client, *_):
-        self.log.info("Connected to MQTT broker")
+    def _on_connect(self, client, userdata, flags, reason_code, properties):
+        self.log.info(f"Connected to MQTT broker with reason code: {reason_code}")
         if self.cmd_topic:
-            client.subscribe(f"{self.root_topic}/{self.cmd_topic}")
+            # Robust topic joining for command subscription
+            sub_topic = "/".join(filter(None, [self.root_topic.strip("/"), self.cmd_topic.strip("/")]))
+            client.subscribe(sub_topic)
 
-    def _on_disconnect(self, *_):
-        self.log.warning("Disconnected from MQTT broker")
+    def _on_disconnect(self, client, userdata, flags, reason_code, properties):
+        self.log.warning(f"Disconnected from MQTT broker with reason code: {reason_code}")
 
-    def _on_message(self, client, _, msg):
+    def _on_message(self, client, userdata, msg):
         try:
             payload = json.loads(msg.payload.decode("utf-8"))
         except Exception:
@@ -127,10 +132,19 @@ class MQTTService:
         self.publish(self.status_subtopic, payload, retain=True)
 
     def publish(self, subtopic: str, payload: Any, retain: bool = True) -> None:
-        topic = f"{self.root_topic}/{subtopic}"
+        # Robust topic joining
+        parts = [self.root_topic, subtopic]
+        topic = "/".join(filter(None, [p.strip("/") for p in parts]))
+        
         if isinstance(payload, (dict, list)):
             payload = json.dumps(payload)
-        self._client.publish(topic, payload, retain=retain)
+        
+        # Use qos=1 for retained messages to ensure they are received by the broker correctly
+        # Retained messages are often critical state, so qos=1 is appropriate.
+        qos = 1 if retain else 0
+        
+        self.log.debug(f"MQTT Publish: topic={topic}, retain={retain}, qos={qos}, payload_type={type(payload)}")
+        self._client.publish(topic, payload, qos=qos, retain=retain)
 
     # Pure formatter for status payload (keeps _build_status_payload as alias)
     @staticmethod
@@ -706,7 +720,11 @@ class ScheduleHandler:
         if not gwy or not getattr(gwy, "tcs", None):
             raise ScheduleError("No controller available")
 
-        zone = gwy.tcs.zone_by_idx.get(zone_idx)
+        if zone_idx == "HW":
+            dhw = gwy.tcs.dhw
+            zone: Any = dhw
+        else:
+            zone = gwy.tcs.zone_by_idx.get(zone_idx)
         if not zone:
             raise ScheduleError(f"Zone not found: {zone_idx}")
 
@@ -744,7 +762,11 @@ class ScheduleHandler:
         if not gwy or not getattr(gwy, "tcs", None):
             raise ScheduleError("No controller available")
 
-        zone = gwy.tcs.zone_by_idx.get(zone_idx)
+        if zone_idx == "HW":
+            dhw = gwy.tcs.dhw
+            zone: Any = dhw
+        else:
+            zone = gwy.tcs.zone_by_idx.get(zone_idx)
         if not zone:
             raise ScheduleError(f"Zone not found: {zone_idx}")
 

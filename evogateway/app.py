@@ -203,11 +203,11 @@ class EvoGatewayApp:
 
         try:
             # Publish both the json and the individual items
-            self.mqtt._client.publish(topic, json.dumps(payload), retain=True)
-            self.mqtt._client.publish(f"{topic}/command", cmd, retain=True)
-            self.mqtt._client.publish(f"{topic}/status", status, retain=True)
-            self.mqtt._client.publish(f"{topic}/error", error or "", retain=True)
-            self.mqtt._client.publish(f"{topic}/timestamp", ts, retain=True)
+            self.mqtt._client.publish(topic, json.dumps(payload), qos=1, retain=True)
+            self.mqtt._client.publish(f"{topic}/command", cmd, qos=1, retain=True)
+            self.mqtt._client.publish(f"{topic}/status", status, qos=1, retain=True)
+            self.mqtt._client.publish(f"{topic}/error", error or "", qos=1, retain=True)
+            self.mqtt._client.publish(f"{topic}/timestamp", ts, qos=1, retain=True)
         except Exception:
             self.log.exception("Failed to publish command status to MQTT")
 
