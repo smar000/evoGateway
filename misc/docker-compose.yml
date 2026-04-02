@@ -1,0 +1,30 @@
+services:
+  evogateway:
+    build:
+      context: ..
+      dockerfile: misc/Dockerfile
+    container_name: evogateway-dev
+    restart: unless-stopped
+
+    # Allocate a pseudo-TTY so that colour output (colorama/colorlog) is enabled
+    tty: true
+
+    # Pass host timezone into the container so USE_LOCAL_TIME works correctly
+    environment:
+      - TZ=${TZ:-Europe/London}
+      - PYTHONUNBUFFERED=1
+
+    # Serial device passthrough — use the stable by-id symlink rather than
+    # /dev/ttyUSBx which can change on reboot
+    devices:
+      - /dev/serial/by-id/usb-1a86_USB2.0-Serial-if00-port0:/dev/evoqinheng
+
+    # Config (rw — schema file is updated at runtime)
+    # Logs (rw)
+    volumes:
+      - ../config:/app/config
+      - ../logs:/app/logs
+
+    # Grant access to the dialout group for serial port access
+    group_add:
+      - dialout
