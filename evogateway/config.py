@@ -17,7 +17,7 @@ from colorama import Fore, Back, Style # For DEFAULT_COLOURS only
 import logging
 
 # Constants & defaults
-GATEWAY_VERSION = "4.2-0.52.1"
+GATEWAY_VERSION = "4.3-0.52.1"
 
 CONFIG_DIR_NAME: Final[Path] = Path("config")
 LOGS_DIR_NAME: Final[Path] = Path("logs")
@@ -265,6 +265,7 @@ class MiscConfig:
     log_level_int: int = logging.INFO # default to INFO (20)
     log_events_to_console: bool = False
     log_events_with_device_names: bool = True
+    use_local_time: bool = False
 
 @dataclass
 class AppConfig:
@@ -353,7 +354,8 @@ class AppConfig:
             display_colours=_ensure_colour_scheme(parser.get("Misc", "DISPLAY_COLOURS", fallback=None)),
             log_level_int=log_level_int, # <- Pass the integer value
             log_events_to_console = parser.getboolean("Misc", "EVENTS_CONSOLE_OUTPUT", fallback=False),
-            log_events_with_device_names = parser.getboolean("Misc", "EVENTS_LOG_WITH_DEVICE_NAMES", fallback=True)
+            log_events_with_device_names = parser.getboolean("Misc", "EVENTS_LOG_WITH_DEVICE_NAMES", fallback=True),
+            use_local_time=parser.getboolean("Misc", "USE_LOCAL_TIME", fallback=False),
         )
 
         return cls(serial=serial, files=files, mqtt=mqtt, ramses=ramses, misc=misc)

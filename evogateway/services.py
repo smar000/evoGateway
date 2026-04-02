@@ -60,6 +60,7 @@ class MQTTService:
         on_message_async: Callable[[dict], Awaitable[None]] | None,
         loop: asyncio.AbstractEventLoop,
         logger: logging.Logger,
+        use_local_time: bool = False,
     ) -> None:
         self.server = server
         self.user = user
@@ -71,6 +72,7 @@ class MQTTService:
         self._on_message_async = on_message_async
         self._loop = loop
         self.log = logger
+        self.use_local_time = use_local_time
 
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.client_id, protocol=mqtt.MQTTv5)
         self._client.on_connect = self._on_connect
@@ -146,18 +148,13 @@ class MQTTService:
         self.log.debug(f"MQTT Publish: topic={topic}, retain={retain}, qos={qos}, payload_type={type(payload)}")
         self._client.publish(topic, payload, qos=qos, retain=retain)
 
-    # Pure formatter for status payload (keeps _build_status_payload as alias)
-    @staticmethod
-    def format_status_payload(status: str) -> dict:
-        """Pure formatting for status payload."""
-        return {"status": status, "status_ts": _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+    def format_status_payload(self, status: str) -> dict:
+        """Format status payload, using local time if configured."""
+        return {"status": status, "status_ts": _dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S") if self.use_local_time else _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
 
-    @staticmethod
-    def _build_status_payload(status: str) -> dict:
-        """
-        Backwards-compatible alias: delegate to format_status_payload() to preserve behaviour.
-        """
-        return MQTTService.format_status_payload(status)
+    def _build_status_payload(self, status: str) -> dict:
+        """Backwards-compatible alias: delegate to format_status_payload()."""
+        return self.format_status_payload(status)
 
 
 @dataclass

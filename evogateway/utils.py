@@ -42,6 +42,11 @@ def truncate(s: str | None, length: int) -> str:
     return (s[: max(0, length - 3)] + "...") if len(s) > length else s
 
 
+def local_now(local_time: bool = False) -> _dt.datetime:
+    """Return current datetime; astimezone() honours OS DST if local_time is True."""
+    return _dt.datetime.now().astimezone() if local_time else _dt.datetime.now()
+
+
 def print_formatted_row(
     text: str,
     *,
@@ -51,9 +56,10 @@ def print_formatted_row(
     dst: str | None = None,
     verb: str | None = None,
     cmd: str | None = None,
-    rssi: str | None = None
+    rssi: str | None = None,
+    local_time: bool = False,
 ) -> None:
-    dtm = _dt.datetime.now().strftime("%Y-%m-%d %X")
+    dtm = local_now(local_time).strftime("%Y-%m-%d %X")
     if src:
         row = (
             f"{dtm} |{(rssi or '   ')}| {truncate(src, 21):<21} -> "

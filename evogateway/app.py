@@ -22,7 +22,7 @@ from .logger import init_logging
 from .router import MessageRouter
 from .services import RamsesService, MQTTService, ScheduleHandler, PersistenceService
 from .registry import DeviceRegistry
-from .utils import print_formatted_row
+from .utils import print_formatted_row, local_now
 
 
 class EvoGatewayApp:
@@ -152,7 +152,7 @@ class EvoGatewayApp:
     ) -> None:
         """Publish command status via MQTT, log file, and console."""
 
-        ts = _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        ts = local_now(self.cfg.misc.use_local_time).strftime("%Y-%m-%dT%H:%M:%S")
 
         msg_parts: list[str] = [f"Command Send Status: {status}"]
         if cmd:
@@ -264,7 +264,7 @@ class EvoGatewayApp:
             # Timestamp
             self.mqtt.publish(
                 f"{base}/_{gateway_name}_ts",
-                _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
+                local_now(self.cfg.misc.use_local_time).strftime("%Y-%m-%dT%H:%M:%S"),
             )
         except Exception as ex:
             print_formatted_row(f"Exception: {ex}")
@@ -319,6 +319,7 @@ class EvoGatewayApp:
             on_message_async=self._on_mqtt_message,
             loop=self.loop,
             logger=self.log,
+            use_local_time=self.cfg.misc.use_local_time,
         )
         self.mqtt.start()  # do not await
 
@@ -334,6 +335,7 @@ class EvoGatewayApp:
             pub_kv_with_json=self.cfg.mqtt.pub_kv_with_json,
             log_events_with_device_names=self.cfg.misc.log_events_with_device_names,
             logger=self.log,
+            use_local_time=self.cfg.misc.use_local_time,
         )
 
         # Ramses

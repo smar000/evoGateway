@@ -16,7 +16,7 @@ from colorama import init as colorama_init, Fore, Back, Style
 
 from ramses_tx.message import CODE_NAMES
 
-from .utils import to_snake_case, clean_display_text, print_formatted_row
+from .utils import to_snake_case, clean_display_text, print_formatted_row, local_now
 from .utils import apply_address_aliases, zone_group
 from .utils import mqtt_safe_value
 from .models import ParsedMessage
@@ -39,6 +39,7 @@ class MessageRouter:
         pub_kv_with_json: bool,
         log_events_with_device_names: bool,
         logger: logging.Logger,
+        use_local_time: bool = False,
     ) -> None:
 
         # MQTT interface
@@ -64,6 +65,7 @@ class MessageRouter:
         # Logging
         self.log_events_with_device_names = log_events_with_device_names
         self.log = logger
+        self.use_local_time = use_local_time
 
         # Dispatcher: family → handler
         self.family_handlers = {
@@ -156,7 +158,7 @@ class MessageRouter:
 
     def format_timestamp(self) -> str:
         """Return ISO-like timestamp string."""
-        return _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        return local_now(self.use_local_time).strftime("%Y-%m-%dT%H:%M:%S")
             
     def format_mqtt_payload(self, parsed: ParsedMessage) -> Dict[str, Any]:
         return parsed.payload | {"timestamp": parsed.timestamp}
@@ -169,6 +171,7 @@ class MessageRouter:
         print_formatted_row(
             row_text,
             min_row_length=self.min_row_length,
+            local_time=self.use_local_time,
             **metadata,
         )
         

@@ -138,6 +138,9 @@ FORCE_SINGLE_HGI = True
 # Leave blank to use defaults
 DISPLAY_COLOURS =
 
+# Use local OS timezone for timestamps (True = DST-aware local time, False = system default).
+USE_LOCAL_TIME = False
+
 # Logging verbosity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = INFO
 

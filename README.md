@@ -188,6 +188,13 @@ Broker credentials, topic definitions, and publishing behaviour:
 * Legacy topic compatibility mode
 
 
+#### **Misc / Logging Settings**
+
+* `LOG_LEVEL` — verbosity of the event log (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
+* `EVENTS_CONSOLE_OUTPUT` — whether to echo events to the console
+* `USE_LOCAL_TIME` — when `True`, event log and MQTT status timestamps use the local OS timezone (DST-aware). Defaults to `False` (system default, typically UTC in server environments).
+
+
 
 ---
 
