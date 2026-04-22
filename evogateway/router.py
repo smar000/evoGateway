@@ -201,6 +201,9 @@ class MessageRouter:
             if updated:
                 state["timestamp"] = parsed.timestamp
                 zone_slug = parsed.topic_zone()
+                if not zone_slug and parsed.zone_id == "HW" and getattr(self.mqtt_topics, "dhw_is_zone", True):
+                    dhw = getattr(self.mqtt_topics, "dhw", "_dhw")
+                    zone_slug = to_snake_case(dhw).lower() if dhw else None
                 if zone_slug:
                     zones_root = getattr(self.mqtt_topics, "zones", "zones")
                     subtopic = f"{zones_root}/{zone_slug}/state"

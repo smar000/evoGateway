@@ -53,6 +53,9 @@ DEVICE_SENSORS: dict[str, list[dict]] = {
 # HA-friendly mode names accepted by the climate entity
 ZONE_HVAC_MODES = ["heat", "off"]
 
+# DHW-specific climate modes
+DHW_HVAC_MODES = ["auto", "on", "off", "temporary"]
+
 # Evohome system-level modes exposed as a select entity
 SYSTEM_MODES = ["auto", "away", "heating_off", "day_off", "auto_with_reset", "custom"]
 
@@ -92,6 +95,9 @@ class HADiscovery:
             self._publish_zone_heat_demand(zone_id, zone_name)
 
         self._publish_system_mode()
+
+        if self.topics.dhw_is_zone:
+            self._publish_dhw_climate()
 
         for dev_id, dev_type in self.registry.type_of_id.items():
             if dev_type in ("01", "18"):
@@ -187,6 +193,36 @@ class HADiscovery:
             "payload_not_available": "Offline",
         }
         disc_topic = f"{self.ha_prefix}/sensor/evogateway_zone_{zone_id}_heat_demand/config"
+        self._publish_raw(disc_topic, payload)
+
+    def _publish_dhw_climate(self) -> None:
+        dhw_slug = to_snake_case(self.topics.dhw).lower()
+        state_topic = self._zone_state_topic(dhw_slug)
+        cmd_topic = self._cmd_topic()
+
+        payload = {
+            "name": "Hot Water",
+            "unique_id": "evogateway_dhw",
+            "device": self._zone_device("HW", "Hot Water"),
+            "current_temperature_topic": state_topic,
+            "current_temperature_template": "{{ value_json.temperature }}",
+            "temperature_state_topic": state_topic,
+            "temperature_state_template": "{{ value_json.setpoint }}",
+            "temperature_command_topic": cmd_topic,
+            "temperature_command_template": '{"command": "set_dhw_temp", "setpoint": {{ value }}}',
+            "modes": DHW_HVAC_MODES,
+            "mode_state_topic": state_topic,
+            "mode_state_template": "{{ value_json.mode | default('auto') | lower }}",
+            "mode_command_topic": cmd_topic,
+            "mode_command_template": '{"command": "set_dhw_mode", "mode": "{{ value }}"}',
+            "min_temp": 30,
+            "max_temp": 85,
+            "temp_step": 1,
+            "availability_topic": self._status_topic(),
+            "payload_available": "Online",
+            "payload_not_available": "Offline",
+        }
+        disc_topic = f"{self.ha_prefix}/climate/evogateway_dhw/config"
         self._publish_raw(disc_topic, payload)
 
     # ------------------------------------------------------------------
