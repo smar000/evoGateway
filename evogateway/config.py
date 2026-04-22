@@ -17,7 +17,7 @@ from colorama import Fore, Back, Style # For DEFAULT_COLOURS only
 import logging
 
 # Constants & defaults
-GATEWAY_VERSION = "4.3-0.52.1"
+GATEWAY_VERSION = "4.4-0.52.1"
 
 CONFIG_DIR_NAME: Final[Path] = Path("config")
 LOGS_DIR_NAME: Final[Path] = Path("logs")
@@ -141,6 +141,10 @@ class MqttConfig:
 
     dhw_is_zone: bool = True
     dhw_zone_subtopic: str = "_dhw"
+
+    # Home Assistant MQTT discovery
+    ha_discovery_enabled: bool = False
+    ha_discovery_prefix: str = "homeassistant"
 
     # Filled automatically in __post_init__
     topics: "MqttConfig.TopicLayout" = field(init=False)
@@ -330,6 +334,9 @@ class AppConfig:
             dhw_zone_subtopic=parser.get("MQTT", "MQTT_DHW_ZONE_SUBTOPIC", fallback="_dhw"),
             
             dhw_is_zone=parser.getboolean("MQTT", "MQTT_DHW_IS_ZONE", fallback=True),
+
+            ha_discovery_enabled=parser.getboolean("MQTT", "HA_DISCOVERY_ENABLED", fallback=False),
+            ha_discovery_prefix=parser.get("MQTT", "HA_DISCOVERY_PREFIX", fallback="homeassistant"),
         )
 
         ramses = RamsesConfig(

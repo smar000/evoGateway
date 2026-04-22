@@ -73,6 +73,7 @@ graph TD
     subgraph "Logic & Routing"
         APP --> ROUTER[router.py: MessageRouter]
         ROUTER -.-> MODEL[models.py: ParsedMessage]
+        APP -.-> HADISC[ha_discovery.py: HADiscovery]
     end
 
     %% Data Flow Connections
@@ -225,7 +226,8 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
   | **`class MessageRouter`** | **Manages presentation and publishing.** |
   | `handle_message(msg)` | **Entry Point.** Receives raw msg, logs it, parses it, and dispatches it. |
   | `parse_message(msg, item)` | Converts raw packet + payload item into a `ParsedMessage` object. |
-  | `_publish_received_payload` | Takes a `ParsedMessage`, determines the MQTT topic, and publishes. |
+  | `_publish_received_payload` | Takes a `ParsedMessage`, determines the MQTT topic, and publishes. Also triggers `_update_and_publish_state`. |
+  | `_update_and_publish_state` | Maintains per-zone and system state caches; publishes aggregated `zones/<zone>/state` and `system/state` topics consumed by HA discovery. |
   | `family_handlers` | Dictionary mapping message families (e.g., 'temperature') to specific methods. |
   | `handle_temperature`, `handle_fault`, etc. | Specific logic for handling different message types. |
   | `format_simple_row` | Formats the one-line console log output. |
@@ -340,6 +342,33 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 
 ---
 
+### 📂 `evogateway/ha_discovery.py` (Home Assistant Integration)
+
+  * **Purpose:** Generates and publishes Home Assistant MQTT discovery payloads at startup and on every MQTT reconnect.
+  * **Key Class:** `HADiscovery`
+  * **Enabled by:** `HA_DISCOVERY_ENABLED = True` in `evogateway.cfg`
+
+| Class / Function | Description |
+| :--- | :--- |
+| **`class HADiscovery`** | **HA MQTT discovery publisher.** |
+| `publish_all()` | Publishes retained discovery configs for all zones, devices, and system. Called at startup and on MQTT reconnect. |
+| `remove_all()` | Removes all HA discovery entries by publishing empty retained payloads. Triggered by `REMOVE_HA_DISCOVERY` sys_config command. |
+| `_publish_zone_climate` | `climate` entity per zone (setpoint, mode, current temp via zone state topic). |
+| `_publish_zone_heat_demand` | `sensor` entity per zone (heat demand %). |
+| `_publish_system_mode` | `select` entity for system-wide mode control. |
+| `_publish_device_sensors` | Per-physical-device sensor/binary_sensor entities (temperature, battery, window open, actuator state). |
+| `DEVICE_SENSORS` | Dict mapping device type codes → list of sensor descriptors. Edit here to add/rename sensor code names. |
+
+### How It Links
+
+* Instantiated by `app.py` after startup if `ha_discovery_enabled` is set.
+* Reads zone and device metadata from `DeviceRegistry`.
+* Uses `MQTTService.publish(raw=True)` to publish to full `homeassistant/…` topics without root_topic prefix.
+* Zone state data (`zones/<zone>/state`) is written by `MessageRouter._update_and_publish_state`, not by `HADiscovery` itself.
+* `MQTTService._on_connect_extra` hook calls `publish_all()` on reconnect.
+
+---
+
 ### 📂 `evogateway/utils.py` (Helpers)
 
   * **Purpose:** Common helper functions for formatting and string manipulation, used throughout
@@ -442,18 +471,19 @@ class ParsedMessage:
 
 ## 6. Summary: What Each File Does
 
-| File            | Purpose                                                           |
-| --------------- | ----------------------------------------------------------------- |
-| `evogateway.py` | Main CLI entrypoint; loads config and runs app.                   |
-| `app.py`        | Orchestration, dependency injection, lifecycle management.        |
-| `config.py`     | All configuration structures + constants + topic layout.          |
-| `registry.py`   | Device metadata source of truth (aliases, zones, UFH).            |
-| `router.py`     | Formats + routes messages, publishes MQTT output.                 |
-| `services.py`   | MQTTService, RamsesService, PersistenceService, ScheduleHandler.  |
-| `models.py`     | ParsedMessage model, message classification + MQTT topic helpers. |
-| `utils.py`      | String/JSON formatting, printing, snake_case, helpers.            |
-| `logger.py`     | Rotating logs + colour output configuration.                      |
-| `README.md`     | Human-facing documentation.                                       |
+| File               | Purpose                                                           |
+| ------------------ | ----------------------------------------------------------------- |
+| `evogateway.py`    | Main CLI entrypoint; loads config and runs app.                   |
+| `app.py`           | Orchestration, dependency injection, lifecycle management.        |
+| `config.py`        | All configuration structures + constants + topic layout.          |
+| `registry.py`      | Device metadata source of truth (aliases, zones, UFH).            |
+| `router.py`        | Formats + routes messages, publishes MQTT output, zone state agg. |
+| `services.py`      | MQTTService, RamsesService, PersistenceService, ScheduleHandler.  |
+| `models.py`        | ParsedMessage model, message classification + MQTT topic helpers. |
+| `ha_discovery.py`  | Home Assistant MQTT discovery publisher.                          |
+| `utils.py`         | String/JSON formatting, printing, snake_case, helpers.            |
+| `logger.py`        | Rotating logs + colour output configuration.                      |
+| `README.md`        | Human-facing documentation.                                       |
 
 
 ## 7. System Architecture Diagram
@@ -632,8 +662,9 @@ This section shows **who imports whom** inside the `evogateway/` package plus th
 * `utils.py`    ⇠ used by: `evogateway.py` (print_formatted_row), `app.py`, `router.py`, `services.py` (fake messages), `models.py`.
 * `models.py`   ⇠ used by: `router.py` only.
 * `router.py`   ⇠ used by: `app.py` (constructed once and passed), `services.ScheduleHandler` (for schedule-related routing).
-* `services.py` ⇠ used by: `app.py` (all services are created there).
-* `app.py`      ⇠ used by: `evogateway.py`.
+* `services.py`      ⇠ used by: `app.py` (all services are created there).
+* `ha_discovery.py`  ⇠ used by: `app.py` (instantiated at startup if enabled).
+* `app.py`           ⇠ used by: `evogateway.py`.
 
 ### 8.3 Conceptual Layers
 
@@ -667,6 +698,10 @@ This layered view makes it easier to see where to plug in new behaviour (e.g. an
 * If MQTT publishing looks strange, examine: `ParsedMessage.topic_base()`.
 * If RF messages look wrong, inspect `router.parse_message()`.
 * For quick changes to logging/colours, see `config.DEFAULT_COLOURS` and `MiscConfig`.
+* **HA discovery not appearing?** Check `HA_DISCOVERY_ENABLED = True` in cfg; subscribe to `homeassistant/#` on the broker to verify retained payloads are present.
+* **HA zone state not updating?** Check `router._update_and_publish_state`; subscribe to `<root>/zones/<zone>/state`.
+* **Adding a new device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py` — all sensor definitions are in one place.
+* **Renaming zones?** Send `REMOVE_HA_DISCOVERY` first, rename in schema, then restart to republish clean discovery entries.
 
 ### How do I run this?
 

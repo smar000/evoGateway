@@ -67,6 +67,10 @@ class MessageRouter:
         self.log = logger
         self.use_local_time = use_local_time
 
+        # Aggregated state caches for HA-friendly topics
+        self._zone_state: dict[str, dict] = {}   # zone_id → latest aggregated state
+        self._system_state: dict = {}             # system-level state
+
         # Dispatcher: family → handler
         self.family_handlers = {
             "temperature": self.handle_temperature,
@@ -175,6 +179,43 @@ class MessageRouter:
             **metadata,
         )
         
+    # Zone / system state aggregation
+    _ZONE_TRACKED = frozenset({
+        "temperature", "sensor_temperature", "dhw_temperature",
+        "setpoint", "mode", "heat_demand",
+    })
+    _SYSTEM_TRACKED = frozenset({
+        "system_mode", "heat_demand", "boiler_status", "flame",
+    })
+
+    def _update_and_publish_state(self, parsed: ParsedMessage) -> None:
+        """Maintain aggregated per-zone and system state topics consumed by HA discovery."""
+        updated = False
+
+        if parsed.zone_id and parsed.zone_id not in ("SYS", "FA", "FC", "F9"):
+            state = self._zone_state.setdefault(parsed.zone_id, {})
+            for k, v in parsed.payload.items():
+                if k in self._ZONE_TRACKED:
+                    state[k] = v
+                    updated = True
+            if updated:
+                state["timestamp"] = parsed.timestamp
+                zone_slug = parsed.topic_zone()
+                if zone_slug:
+                    zones_root = getattr(self.mqtt_topics, "zones", "zones")
+                    subtopic = f"{zones_root}/{zone_slug}/state"
+                    self.mqtt.publish(subtopic, dict(state), retain=False)
+
+        if parsed.zone_id == "SYS" or parsed.zone_id is None:
+            sys_updated = False
+            for k, v in parsed.payload.items():
+                if k in self._SYSTEM_TRACKED:
+                    self._system_state[k] = v
+                    sys_updated = True
+            if sys_updated:
+                self._system_state["timestamp"] = parsed.timestamp
+                self.mqtt.publish("system/state", dict(self._system_state), retain=False)
+
     # MQTT publishing
     def publish_mqtt(self, topic: str, payload: Any) -> None:
         """Thin wrapper so MessageRouter never calls MQTTService directly."""
@@ -213,6 +254,8 @@ class MessageRouter:
         # timestamp topic
         ts_topic = f"{topic}/{parsed.topic_code()}_ts"
         self.mqtt.publish(ts_topic, timestamp)
+
+        self._update_and_publish_state(parsed)
 
     # def _publish_received_payload(self, parsed: ParsedMessage) -> None:
     #     """Publish MQTT output using the structured ParsedMessage helpers."""

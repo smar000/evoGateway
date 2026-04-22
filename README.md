@@ -39,7 +39,10 @@ The codebase is now organised into distinct functional components, moving away f
 ├── evogateway/
 │   ├── app.py
 │   ├── config.py
+│   ├── ha_discovery.py
 │   ├── logger.py
+│   ├── models.py
+│   ├── registry.py
 │   ├── router.py
 │   ├── services.py
 │   └── utils.py
@@ -187,6 +190,68 @@ Broker credentials, topic definitions, and publishing behaviour:
 * Zone grouping or device-flat layout
 * Legacy topic compatibility mode
 
+
+#### **Home Assistant MQTT Discovery**
+
+evoGateway can publish [MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery) payloads in the Home Assistant MQTT discovery format, for automatic recognition of the devices by compatible home automation systems such as openHAB and, of course, Home Assistant. 
+
+Enable it by adding to the `[MQTT]` section of `evogateway.cfg`:
+
+```ini
+HA_DISCOVERY_ENABLED = True
+HA_DISCOVERY_PREFIX  = homeassistant   ; default — match HA's discovery prefix setting
+```
+
+When enabled, evoGateway publishes retained discovery messages to `<HA_DISCOVERY_PREFIX>/<component>/<object_id>/config` at startup and after every MQTT broker reconnect. When set to `False`, evoGateway automatically removes any previously-published discovery entries from the broker on the next startup.
+
+##### What gets discovered
+
+| Entity type | One per… | Notes |
+|---|---|---|
+| `climate` | Heating zone | Current temperature, setpoint control, mode (heat / off) |
+| `sensor` (heat demand) | Heating zone | Heat demand % for the zone |
+| `sensor` / `binary_sensor` | Physical device (TRV, relay, etc.) | Temperature, battery %, window open, actuator state — varies by device type |
+| `select` | Gateway | System-wide operating mode (auto, away, heating off, etc.) |
+
+##### HA device grouping
+
+* Each **heating zone** gets its own HA device card (climate + heat demand grouped together).
+* Each **physical device** (TRV, relay, DHW sensor, etc.) gets its own HA device card showing all its sensors.
+* The **gateway itself** appears as a single parent device containing only the system mode select.
+* All zone and device cards show `via evoGateway` in HA, linking them back to the gateway.
+
+##### Zone and system state topics
+
+evoGateway publishes two aggregated JSON topics that HA discovery entities subscribe to:
+
+| Topic | Contents |
+|---|---|
+| `<root>/zones/<zone_slug>/state` | `temperature`, `setpoint`, `mode`, `heat_demand`, `timestamp` |
+| `<root>/system/state` | `system_mode`, `heat_demand`, `flame`, `boiler_status`, `timestamp` |
+
+These are updated in real time as RF messages arrive. All other existing per-device topics are unaffected.
+
+##### Availability
+
+All discovered entities use the gateway's `<root>/status` topic as their availability source. When evoGateway shuts down, the MQTT Last Will sets this to `Offline` and all entities show as unavailable in HA. They recover automatically on the next evoGateway startup — no HA restart needed.
+
+##### Removing discovery entries
+
+If `HA_DISCOVERY_ENABLED` is set to `False`, evoGateway will **automatically remove all previously-published discovery entries** on the next startup. No manual action is needed.
+
+To remove entries immediately without restarting (e.g. before renaming zones), send:
+
+```json
+{"sys_config": "REMOVE_HA_DISCOVERY"}
+```
+
+This publishes empty retained payloads to every discovery topic, which instructs HA to remove the entities immediately. Re-enabling discovery on the next start will recreate them from scratch.
+
+> **Note:** If you rename zones and disable discovery in the same restart, automatic cleanup may miss entries published under the old zone names. Use the `REMOVE_HA_DISCOVERY` command *before* renaming as a workaround.
+>
+> Neither operation affects evoGateway's normal MQTT publishing.
+
+---
 
 #### **Misc / Logging Settings**
 
@@ -543,7 +608,10 @@ Currently supported (subject to change as the gateway evolves):
 * `SAVE_SCHEMA`
   As above, and additionally saves the current schema back to the `ramses_rf_schema.json` file.
 
-These operations are of course local to evoGateway and are not forwarded on the RF network.
+* `REMOVE_HA_DISCOVERY`
+  Removes all evoGateway MQTT discovery entries from Home Assistant by publishing empty retained payloads to every discovery topic. Use this before a reconfiguration (e.g. renaming zones) or when uninstalling. See the [Home Assistant MQTT Discovery](#home-assistant-mqtt-discovery) section for details.
+
+These operations are local to evoGateway and are not forwarded on the RF network.
 
 ---
 

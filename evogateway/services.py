@@ -74,6 +74,8 @@ class MQTTService:
         self.log = logger
         self.use_local_time = use_local_time
 
+        self._on_connect_extra: Callable[[], None] | None = None
+
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=self.client_id, protocol=mqtt.MQTTv5)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
@@ -115,6 +117,8 @@ class MQTTService:
             # Robust topic joining for command subscription
             sub_topic = "/".join(filter(None, [self.root_topic.strip("/"), self.cmd_topic.strip("/")]))
             client.subscribe(sub_topic)
+        if self._on_connect_extra:
+            self._on_connect_extra()
 
     def _on_disconnect(self, client, userdata, flags, reason_code, properties):
         self.log.warning(f"Disconnected from MQTT broker with reason code: {reason_code}")
@@ -133,10 +137,13 @@ class MQTTService:
         payload = self.format_status_payload(status)
         self.publish(self.status_subtopic, payload, retain=True)
 
-    def publish(self, subtopic: str, payload: Any, retain: bool = True) -> None:
-        # Robust topic joining
-        parts = [self.root_topic, subtopic]
-        topic = "/".join(filter(None, [p.strip("/") for p in parts]))
+    def publish(self, subtopic: str, payload: Any, retain: bool = True, raw: bool = False) -> None:
+        # raw=True: subtopic is already a full MQTT topic (e.g. for HA discovery)
+        if raw:
+            topic = subtopic
+        else:
+            parts = [self.root_topic, subtopic]
+            topic = "/".join(filter(None, [p.strip("/") for p in parts]))
         
         if isinstance(payload, (dict, list)):
             payload = json.dumps(payload)
@@ -406,7 +413,7 @@ class RamsesService:
                 publish_status(cmd_name, "Transmitted")
 
                 cmd = str(cmd_name).upper().strip()
-                if cmd in ("POST_SCHEMA", "SAVE_SCHEMA"):
+                if cmd in ("POST_SCHEMA", "SAVE_SCHEMA", "REMOVE_HA_DISCOVERY"):
                     self._refresh_zones()
                     self._refresh_devices()
                     self._publish_schema()

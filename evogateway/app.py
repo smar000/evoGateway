@@ -374,8 +374,25 @@ class EvoGatewayApp:
         if hgi_id and self.cfg.misc.this_gateway_name:
             self.registry.update_alias(hgi_id, self.cfg.misc.this_gateway_name)
       
-        # Show known devices on startup 
+        # Show known devices on startup
         self.router.display_device_list(self.ramses)
+
+        # Home Assistant MQTT discovery
+        from .ha_discovery import HADiscovery
+        self._ha_discovery = HADiscovery(
+            registry=self.registry,
+            mqtt_topics=self.mqtt_topics,
+            mqtt_service=self.mqtt,
+            ha_prefix=self.cfg.mqtt.ha_discovery_prefix,
+            gateway_name=self.cfg.misc.this_gateway_name,
+        )
+        if self.cfg.mqtt.ha_discovery_enabled:
+            self._ha_discovery.publish_all()
+            # Re-publish on every MQTT reconnect so HA picks up after broker restart
+            self.mqtt._on_connect_extra = self._ha_discovery.publish_all
+        else:
+            # Discovery disabled — remove any retained entries left from a previous run
+            await self._ha_discovery.remove_all()
 
         try:
             while True:
@@ -423,9 +440,15 @@ class EvoGatewayApp:
     # Sys-config persistence hook (invoked from RamsesService on SAVE_SCHEMA/POST_SCHEMA)
     def _handle_sys_config(self, cmd: str) -> None:
         try:
-            self._publish_schema_snapshot()
-            if cmd in "SAVE_SCHEMA":
+            if cmd in ("POST_SCHEMA", "SAVE_SCHEMA"):
+                self._publish_schema_snapshot()
+            if cmd == "SAVE_SCHEMA":
                 schema = self.current_schema_snapshot()
                 self.persistence.save_schema(schema)
+            if cmd == "REMOVE_HA_DISCOVERY":
+                if self.mqtt:
+                    self.mqtt._on_connect_extra = None
+                if hasattr(self, "_ha_discovery") and self._ha_discovery and self.loop:
+                    self.loop.create_task(self._ha_discovery.remove_all())
         except Exception:
-            self.log.exception("Failed persisting schema")
+            self.log.exception("Failed handling sys_config command")
