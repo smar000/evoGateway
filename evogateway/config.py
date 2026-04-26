@@ -146,6 +146,21 @@ class MqttConfig:
     ha_discovery_enabled: bool = False
     ha_discovery_prefix: str = "homeassistant"
 
+    # Prefix for all HA device/entity unique IDs (defaults to snake_case of MQTT_CLIENTID).
+    # Change this if running dev and prod gateways against the same HA instance.
+    ha_discovery_id_prefix: str = ""
+
+    # Optional text prepended/appended to zone climate entity names.
+    # e.g. prefix="" suffix="Heating" → "Living Room Heating"
+    ha_zone_climate_prefix: str = ""
+    ha_zone_climate_suffix: str = "Heating"
+
+    # Advanced: override DHW topic sub-paths (relative to {root}/zones/{dhw_slug}/).
+    # Leave empty to auto-detect from device registry.
+    ha_dhw_temp_subtopic: str = ""
+    ha_dhw_params_subtopic: str = ""
+    ha_dhw_mode_subtopic: str = ""
+
     # Filled automatically in __post_init__
     topics: "MqttConfig.TopicLayout" = field(init=False)
 
@@ -337,6 +352,13 @@ class AppConfig:
 
             ha_discovery_enabled=parser.getboolean("MQTT", "HA_DISCOVERY_ENABLED", fallback=False),
             ha_discovery_prefix=parser.get("MQTT", "HA_DISCOVERY_PREFIX", fallback="homeassistant"),
+            ha_discovery_id_prefix=parser.get("MQTT", "HA_DISCOVERY_ID_PREFIX", fallback=""),
+            ha_zone_climate_prefix=parser.get("MQTT", "HA_ZONE_CLIMATE_PREFIX", fallback=""),
+            ha_zone_climate_suffix=parser.get("MQTT", "HA_ZONE_CLIMATE_SUFFIX", fallback="Heating"),
+
+            ha_dhw_temp_subtopic=parser.get("MQTT", "HA_DHW_TEMP_SUBTOPIC", fallback=""),
+            ha_dhw_params_subtopic=parser.get("MQTT", "HA_DHW_PARAMS_SUBTOPIC", fallback=""),
+            ha_dhw_mode_subtopic=parser.get("MQTT", "HA_DHW_MODE_SUBTOPIC", fallback=""),
         )
 
         ramses = RamsesConfig(

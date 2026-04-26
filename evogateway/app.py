@@ -379,12 +379,22 @@ class EvoGatewayApp:
 
         # Home Assistant MQTT discovery
         from .ha_discovery import HADiscovery
+        from .utils import to_snake_case
+        id_prefix = to_snake_case(
+            self.cfg.mqtt.ha_discovery_id_prefix or self.cfg.mqtt.client_id
+        )
         self._ha_discovery = HADiscovery(
             registry=self.registry,
             mqtt_topics=self.mqtt_topics,
             mqtt_service=self.mqtt,
             ha_prefix=self.cfg.mqtt.ha_discovery_prefix,
             gateway_name=self.cfg.misc.this_gateway_name,
+            id_prefix=id_prefix,
+            zone_climate_prefix=self.cfg.mqtt.ha_zone_climate_prefix,
+            zone_climate_suffix=self.cfg.mqtt.ha_zone_climate_suffix,
+            dhw_temp_subtopic=self.cfg.mqtt.ha_dhw_temp_subtopic,
+            dhw_params_subtopic=self.cfg.mqtt.ha_dhw_params_subtopic,
+            dhw_mode_subtopic=self.cfg.mqtt.ha_dhw_mode_subtopic,
         )
         if self.cfg.mqtt.ha_discovery_enabled:
             self._ha_discovery.publish_all()

@@ -207,7 +207,7 @@ class MessageRouter:
                 if zone_slug:
                     zones_root = getattr(self.mqtt_topics, "zones", "zones")
                     subtopic = f"{zones_root}/{zone_slug}/state"
-                    self.mqtt.publish(subtopic, dict(state), retain=False)
+                    self.mqtt.publish(subtopic, dict(state), retain=True)
 
         if parsed.zone_id == "SYS" or parsed.zone_id is None:
             sys_updated = False
@@ -217,7 +217,7 @@ class MessageRouter:
                     sys_updated = True
             if sys_updated:
                 self._system_state["timestamp"] = parsed.timestamp
-                self.mqtt.publish("system/state", dict(self._system_state), retain=False)
+                self.mqtt.publish("system/state", dict(self._system_state), retain=True)
 
     # MQTT publishing
     def publish_mqtt(self, topic: str, payload: Any) -> None:

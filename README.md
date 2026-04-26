@@ -202,27 +202,45 @@ HA_DISCOVERY_ENABLED = True
 HA_DISCOVERY_PREFIX  = homeassistant   ; default — match HA's discovery prefix setting
 ```
 
-When enabled, evoGateway publishes retained discovery messages to `<HA_DISCOVERY_PREFIX>/<component>/<object_id>/config` at startup and after every MQTT broker reconnect. When set to `False`, evoGateway automatically removes any previously-published discovery entries from the broker on the next startup.
+##### Configuration options
+
+| Parameter | Default | Description |
+|---|---|---|
+| `HA_DISCOVERY_ENABLED` | `False` | Enable/disable HA MQTT discovery |
+| `HA_DISCOVERY_PREFIX` | `homeassistant` | Must match HA's own discovery prefix |
+| `HA_DISCOVERY_ID_PREFIX` | *(snake_case of `MQTT_CLIENTID`)* | Prefix for all device/entity unique IDs. Set this explicitly when running dev and production gateways against the same HA instance to avoid ID collisions. Send `REMOVE_HA_DISCOVERY` before changing this value. |
+| `HA_ZONE_CLIMATE_PREFIX` | *(empty)* | Optional text prepended to zone climate entity names — e.g. `Zone` → *"Zone Living Room Heating"* |
+| `HA_ZONE_CLIMATE_SUFFIX` | `Heating` | Optional text appended to zone climate entity names — e.g. *"Living Room Heating"*. Set to empty to use the bare zone name. |
+
+When enabled, evoGateway publishes retained discovery messages using **HA device-mode discovery** — one topic per logical device containing all its entities:
+
+```
+<HA_DISCOVERY_PREFIX>/device/<device_id>/config
+```
+
+Discovery is published at startup and after every MQTT broker reconnect. When set to `False`, evoGateway automatically removes any previously-published discovery entries from the broker on the next startup.
 
 ##### What gets discovered
 
-| Entity type | One per… | Notes |
-|---|---|---|
-| `climate` | Heating zone | Current temperature, setpoint control, mode (heat / off) |
-| `sensor` (heat demand) | Heating zone | Heat demand % for the zone |
-| `sensor` / `binary_sensor` | Physical device (TRV, relay, etc.) | Temperature, battery %, window open, actuator state — varies by device type |
-| `select` | Gateway | System-wide operating mode (auto, away, heating off, etc.) |
+| Device | Entities bundled inside |
+|---|---|
+| Gateway | System-wide operating mode select (auto, away, heating off, etc.) |
+| Heating zone (one per zone) | Climate (temperature + setpoint control), heat demand % sensor |
+| Hot water (DHW) | Climate with heat / auto / off modes |
+| Physical device — TRV, relay, thermostat, DHW sensor (one per device) | Temperature, battery %, window open, actuator state — varies by device type |
 
-##### HA device grouping
+##### HA device grouping and naming
 
-* Each **heating zone** gets its own HA device card (climate + heat demand grouped together).
-* Each **physical device** (TRV, relay, DHW sensor, etc.) gets its own HA device card showing all its sensors.
-* The **gateway itself** appears as a single parent device containing only the system mode select.
-* All zone and device cards show `via evoGateway` in HA, linking them back to the gateway.
+* The **gateway** is a top-level HA device.
+* Each **heating zone** is a child device of the gateway, containing the zone climate and heat demand entities.
+* Each **physical device** (TRV, relay, etc.) is a child of its zone, named `"{Zone Name} {Type} ({alias})"` — e.g. *"Living Room TRV (Middle)"*. All of its sensors appear together on one HA device card.
+* The hierarchy in HA is: `evoGateway → Zone → Physical Device`.
 
-##### Zone and system state topics
+##### Data sources
 
-evoGateway publishes two aggregated JSON topics that HA discovery entities subscribe to:
+Zone climate entities read temperature and setpoint from the controller's per-zone topics (e.g. `zones/living_room/ctl_controller/temperature`) rather than the aggregated state, so each zone always shows the authoritative controller-reported value.
+
+evoGateway also maintains two aggregated JSON topics used by other entities:
 
 | Topic | Contents |
 |---|---|

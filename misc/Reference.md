@@ -347,24 +347,25 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
   * **Purpose:** Generates and publishes Home Assistant MQTT discovery payloads at startup and on every MQTT reconnect.
   * **Key Class:** `HADiscovery`
   * **Enabled by:** `HA_DISCOVERY_ENABLED = True` in `evogateway.cfg`
+  * **Discovery format:** HA device-mode — one retained topic per logical device (`homeassistant/device/{device_id}/config`), all entities bundled under `components`.
 
 | Class / Function | Description |
 | :--- | :--- |
 | **`class HADiscovery`** | **HA MQTT discovery publisher.** |
-| `publish_all()` | Publishes retained discovery configs for all zones, devices, and system. Called at startup and on MQTT reconnect. |
-| `remove_all()` | Removes all HA discovery entries by publishing empty retained payloads. Triggered by `REMOVE_HA_DISCOVERY` sys_config command. |
-| `_publish_zone_climate` | `climate` entity per zone (setpoint, mode, current temp via zone state topic). |
-| `_publish_zone_heat_demand` | `sensor` entity per zone (heat demand %). |
-| `_publish_system_mode` | `select` entity for system-wide mode control. |
-| `_publish_device_sensors` | Per-physical-device sensor/binary_sensor entities (temperature, battery, window open, actuator state). |
-| `DEVICE_SENSORS` | Dict mapping device type codes → list of sensor descriptors. Edit here to add/rename sensor code names. |
+| `publish_all()` | Entry point. Resolves controller slug once, then calls the four device publishers for all zones and physical devices. Called at startup and on MQTT reconnect. |
+| `remove_all()` | Removes all HA discovery entries (both legacy `+/+/config` and device-mode `device/+/config`) by publishing empty retained payloads. Triggered by `REMOVE_HA_DISCOVERY` sys_config command. |
+| `_publish_gateway_device` | Gateway device: single system mode `select` component. |
+| `_publish_zone_device` | Zone device: `climate` (temp + setpoint from controller topics) + heat demand `sensor`. |
+| `_publish_dhw_device` | DHW device: `climate` with heat/auto/off modes. Resolves sensor and controller slugs from registry; overridable via config. |
+| `_publish_physical_device` | Physical device (TRV, relay, etc.): all sensors from `DEVICE_SENSORS`, named `"{Zone} {Type} ({alias})"`, parented to zone via `via_device`. |
+| `DEVICE_SENSORS` | Dict mapping device type codes → sensor descriptors with `msg_code` (MQTT topic path) and `field` (JSON payload key). Edit here to add/rename sensors. |
 
 ### How It Links
 
 * Instantiated by `app.py` after startup if `ha_discovery_enabled` is set.
 * Reads zone and device metadata from `DeviceRegistry`.
 * Uses `MQTTService.publish(raw=True)` to publish to full `homeassistant/…` topics without root_topic prefix.
-* Zone state data (`zones/<zone>/state`) is written by `MessageRouter._update_and_publish_state`, not by `HADiscovery` itself.
+* Zone climate entities read from controller-reported per-zone topics; zone state (`zones/<zone>/state`) is still written by `MessageRouter._update_and_publish_state` and used by heat demand sensors.
 * `MQTTService._on_connect_extra` hook calls `publish_all()` on reconnect.
 
 ---
@@ -698,8 +699,8 @@ This layered view makes it easier to see where to plug in new behaviour (e.g. an
 * If MQTT publishing looks strange, examine: `ParsedMessage.topic_base()`.
 * If RF messages look wrong, inspect `router.parse_message()`.
 * For quick changes to logging/colours, see `config.DEFAULT_COLOURS` and `MiscConfig`.
-* **HA discovery not appearing?** Check `HA_DISCOVERY_ENABLED = True` in cfg; subscribe to `homeassistant/#` on the broker to verify retained payloads are present.
-* **HA zone state not updating?** Check `router._update_and_publish_state`; subscribe to `<root>/zones/<zone>/state`.
+* **HA discovery not appearing?** Check `HA_DISCOVERY_ENABLED = True` in cfg; subscribe to `homeassistant/device/#` on the broker to verify retained payloads are present. Each device is one topic: `homeassistant/device/{device_id}/config`.
+* **HA zone temperature not updating?** Zone climate reads from `zones/<zone>/ctl_controller/temperature`. Check `router._update_and_publish_state` for heat demand; subscribe to `<root>/zones/<zone>/state`.
 * **Adding a new device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py` — all sensor definitions are in one place.
 * **Renaming zones?** Send `REMOVE_HA_DISCOVERY` first, rename in schema, then restart to republish clean discovery entries.
 

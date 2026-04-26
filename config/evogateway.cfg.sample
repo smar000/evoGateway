@@ -100,6 +100,32 @@ MQTT_DHW_IS_ZONE = True
 MQTT_DHW_ZONE_SUBTOPIC = _dhw
 
 
+# --- Home Assistant MQTT Discovery ---
+
+# Enable HA MQTT auto-discovery
+HA_DISCOVERY_ENABLED = False
+
+# HA discovery prefix (must match HA's own discovery_prefix setting)
+# HA_DISCOVERY_PREFIX = homeassistant
+
+# Prefix for all HA device/entity unique IDs.
+# Defaults to snake_case of MQTT_CLIENTID if not set.
+# Set explicitly when running dev and prod gateways against the same HA instance.
+# HA_DISCOVERY_ID_PREFIX = my_gateway
+
+# Text prepended/appended to zone climate entity names.
+# e.g. prefix="" suffix="Heating" → "Living Room Heating"
+#      prefix="Zone" suffix=""    → "Zone Living Room"
+# HA_ZONE_CLIMATE_PREFIX =
+HA_ZONE_CLIMATE_SUFFIX = Heating
+
+# Advanced: override DHW sub-topics used for HA discovery (relative to {root}/zones/{dhw_slug}/).
+# Leave commented out to auto-detect from device registry (recommended).
+# HA_DHW_TEMP_SUBTOPIC   = dhw_wireless_sender/dhw_temp
+# HA_DHW_PARAMS_SUBTOPIC = dhw_wireless_sender/dhw_params
+# HA_DHW_MODE_SUBTOPIC   = ctl_controller/dhw_mode
+
+
 
 #------------------------------------------------------------------------------
 # RAMSES_RF ENGINE SETTINGS
