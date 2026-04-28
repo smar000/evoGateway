@@ -28,17 +28,17 @@ if TYPE_CHECKING:
 DEVICE_SENSORS: dict[str, list[dict]] = {
     "04": [  # HR92 / HR80 TRV
         {"msg_code": "temperature",    "field": "temperature",    "name": "Temperature", "class": "temperature", "unit": "°C", "state_class": "measurement"},
-        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement"},
+        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement", "value_template": "{{ (value_json.battery_level * 100) | int }}"},
         {"msg_code": "window_state",   "field": "window_open",    "name": "Window Open", "class": "window",      "binary": True},
         {"msg_code": "heat_demand",    "field": "heat_demand",    "name": "Heat Demand", "unit": "%",            "state_class": "measurement"},
     ],
     "34": [  # T87RF wall thermostat
         {"msg_code": "temperature",    "field": "temperature",    "name": "Temperature", "class": "temperature", "unit": "°C", "state_class": "measurement"},
-        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement"},
+        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement", "value_template": "{{ (value_json.battery_level * 100) | int }}"},
     ],
     "07": [  # CS92 DHW sensor
         {"msg_code": "dhw_temp",       "field": "temperature",    "name": "Temperature", "class": "temperature", "unit": "°C", "state_class": "measurement"},
-        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement"},
+        {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement", "value_template": "{{ (value_json.battery_level * 100) | int }}"},
     ],
     "13": [  # BDR91 boiler/zone relay
         {"msg_code": "actuator_state", "field": "actuator_state", "name": "Actuator",    "class": "running",     "binary": True},
@@ -395,7 +395,7 @@ class HADiscovery:
                 if "class" in sensor:
                     component["device_class"] = sensor["class"]
             else:
-                component["value_template"] = f"{{{{ value_json.{field} }}}}"
+                component["value_template"] = sensor.get("value_template", f"{{{{ value_json.{field} }}}}")
                 if "unit" in sensor:
                     component["unit_of_measurement"] = sensor["unit"]
                 if "class" in sensor:
