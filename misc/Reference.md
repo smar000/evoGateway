@@ -352,13 +352,14 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 | Class / Function | Description |
 | :--- | :--- |
 | **`class HADiscovery`** | **HA MQTT discovery publisher.** |
-| `publish_all()` | Entry point. Resolves controller slug once, then calls the four device publishers for all zones and physical devices. Called at startup and on MQTT reconnect. |
+| `publish_all()` | Entry point. Resolves controller slug once, then calls the four device publishers for all zones and physical devices. Excludes DHW BDR91 relay from the generic device loop (handled inside `_publish_dhw_device`). Called at startup and on MQTT reconnect. |
 | `remove_all()` | Removes all HA discovery entries (both legacy `+/+/config` and device-mode `device/+/config`) by publishing empty retained payloads. Triggered by `REMOVE_HA_DISCOVERY` sys_config command. |
-| `_publish_gateway_device` | Gateway device: single system mode `select` component. |
+| `_publish_gateway_device` | Gateway device: system mode `select` + DHW/Radiators/UFH relay demand `sensor` components (reads from `system/controllers/{ctl}/relay_demand/_domain_*` topics). |
 | `_publish_zone_device` | Zone device: `climate` (temp + setpoint from controller topics) + heat demand `sensor`. |
-| `_publish_dhw_device` | DHW device: `climate` with heat/auto/off modes. Resolves sensor and controller slugs from registry; overridable via config. |
-| `_publish_physical_device` | Physical device (TRV, relay, etc.): all sensors from `DEVICE_SENSORS`, named `"{Zone} {Type} ({alias})"`, parented to zone via `via_device`. |
-| `DEVICE_SENSORS` | Dict mapping device type codes → sensor descriptors with `msg_code` (MQTT topic path) and `field` (JSON payload key). Edit here to add/rename sensors. |
+| `_publish_dhw_device` | DHW device: `climate` (heat/auto/off) + relay active `binary_sensor` (from `bdr_dhw_relay/actuator_state`) + DHW sender battery `sensor`. Resolves sensor, controller, and DHW relay slugs from registry; overridable via config. |
+| `_publish_physical_device` | Physical device (TRV, relay, etc.): all sensors from `DEVICE_SENSORS`, named `"{Zone} {Type} ({alias})"`, parented to zone via `via_device`. System relay devices (types 02, 10, 13) use `system/relays/{slug}/` topic path. |
+| `_find_dhw_relay_slug` | Helper: finds the BDR91 relay in the DHW zone (zone HW or F9) and returns its snake_case slug. |
+| `DEVICE_SENSORS` | Dict mapping device type codes → sensor descriptors with `msg_code` (MQTT topic sub-path, may include `/` for nested paths like `opentherm_msg/boilerwatertemperature`) and `field` (JSON payload key). Multiple entries with the same `msg_code` but different `field` are allowed (e.g. OTB `actuator_state` produces four separate entities). Edit here to add/rename sensors. |
 
 ### How It Links
 
@@ -701,7 +702,7 @@ This layered view makes it easier to see where to plug in new behaviour (e.g. an
 * For quick changes to logging/colours, see `config.DEFAULT_COLOURS` and `MiscConfig`.
 * **HA discovery not appearing?** Check `HA_DISCOVERY_ENABLED = True` in cfg; subscribe to `homeassistant/device/#` on the broker to verify retained payloads are present. Each device is one topic: `homeassistant/device/{device_id}/config`.
 * **HA zone temperature not updating?** Zone climate reads from `zones/<zone>/ctl_controller/temperature`. Check `router._update_and_publish_state` for heat demand; subscribe to `<root>/zones/<zone>/state`.
-* **Adding a new device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py` — all sensor definitions are in one place.
+* **Adding a new device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py` — all sensor definitions are in one place. `msg_code` can contain `/` for nested topic paths (e.g. `opentherm_msg/boilerwatertemperature`). Multiple entries with the same `msg_code` but different `field` names are supported.
 * **Renaming zones?** Send `REMOVE_HA_DISCOVERY` first, rename in schema, then restart to republish clean discovery entries.
 
 ### How do I run this?

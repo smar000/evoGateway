@@ -40,13 +40,26 @@ DEVICE_SENSORS: dict[str, list[dict]] = {
         {"msg_code": "dhw_temp",       "field": "temperature",    "name": "Temperature", "class": "temperature", "unit": "°C", "state_class": "measurement"},
         {"msg_code": "device_battery", "field": "battery_level",  "name": "Battery",     "class": "battery",     "unit": "%",  "state_class": "measurement", "value_template": "{{ (value_json.battery_level * 100) | int }}"},
     ],
-    "13": [  # BDR91 boiler/zone relay
-        {"msg_code": "actuator_state", "field": "actuator_state", "name": "Actuator",    "class": "running",     "binary": True},
-        {"msg_code": "heat_demand",    "field": "heat_demand",    "name": "Heat Demand", "unit": "%",            "state_class": "measurement"},
+    "13": [  # BDR91 boiler/zone relay — actuator_state payload uses modulation_level (0.0–1.0)
+        {"msg_code": "actuator_state", "field": "modulation_level", "name": "Actuator",    "class": "running", "binary": True, "value_template": "{{ 'true' if value_json.modulation_level > 0 else 'false' }}"},
+        {"msg_code": "heat_demand",    "field": "heat_demand",      "name": "Heat Demand", "unit": "%",        "state_class": "measurement"},
     ],
     "10": [  # R8810A OpenTherm bridge
-        {"msg_code": "heat_demand",    "field": "heat_demand",    "name": "Boiler Demand", "unit": "%",          "state_class": "measurement"},
-        {"msg_code": "actuator_state", "field": "actuator_state", "name": "Boiler",       "class": "running",    "binary": True},
+        # Multiple sensors from the actuator_state topic
+        {"msg_code": "actuator_state", "field": "flame_on",         "name": "Flame",             "class": "heat",        "binary": True},
+        {"msg_code": "actuator_state", "field": "ch_active",        "name": "CH Active",         "class": "running",     "binary": True},
+        {"msg_code": "actuator_state", "field": "dhw_active",       "name": "DHW Active",        "class": "running",     "binary": True},
+        {"msg_code": "actuator_state", "field": "modulation_level", "name": "Modulation",        "unit": "%",            "state_class": "measurement", "value_template": "{{ (value_json.modulation_level * 100) | round(1) }}"},
+        {"msg_code": "boiler_setpoint","field": "setpoint",         "name": "Boiler Setpoint",   "class": "temperature", "unit": "°C", "state_class": "measurement"},
+        # Domain-specific heat demand (OTB relays FC/UFH demand)
+        {"msg_code": "heat_demand/_domain_fc_ufh", "field": "heat_demand", "name": "UFH Heat Demand", "unit": "%", "state_class": "measurement", "value_template": "{{ (value_json.heat_demand * 100) | round(1) }}"},
+        # OpenTherm protocol message sub-topics
+        {"msg_code": "opentherm_msg/boilerwatertemperature",  "field": "value",       "name": "Boiler Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/returnwatertemperature",  "field": "value",       "name": "Return Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/chwaterpressure",         "field": "value",       "name": "CH Water Pressure",   "class": "pressure",    "unit": "bar", "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/relativemodulationlevel", "field": "value",       "name": "Modulation Level",    "unit": "%",            "state_class": "measurement", "value_template": "{{ (value_json.value * 100) | round(1) }}"},
+        {"msg_code": "opentherm_msg/fault_flags",             "field": "description", "name": "Fault Description"},
+        {"msg_code": "opentherm_msg/fault_flags",             "field": "value_lb",    "name": "OEM Fault Code",      "state_class": "measurement"},
     ],
     "02": [  # HCC80R UFH controller
         {"msg_code": "heat_demand",    "field": "heat_demand",    "name": "Heat Demand", "unit": "%",            "state_class": "measurement"},
@@ -117,8 +130,16 @@ class HADiscovery:
         if self.topics.dhw_is_zone:
             self._publish_dhw_device()
 
+        # DHW BDR relay is published as part of the DHW device above; skip it here.
+        dhw_relay_ids = {
+            dev_id for dev_id, dev_type in self.registry.type_of_id.items()
+            if dev_type == "13" and self.registry.zone_of(dev_id) in ("HW", "F9")
+        }
+
         for dev_id, dev_type in self.registry.type_of_id.items():
             if dev_type in ("01", "18"):
+                continue
+            if dev_id in dhw_relay_ids:
                 continue
             zone_id = self.registry.zone_of(dev_id)
             if zone_id and zone_id not in _PSEUDO_ZONES:
@@ -163,8 +184,10 @@ class HADiscovery:
     # ------------------------------------------------------------------
 
     def _publish_gateway_device(self) -> None:
-        """Gateway device: system mode select entity."""
-        components = {
+        """Gateway device: system mode select + controller relay demand sensors."""
+        ctl_slug = self._find_device_slug("01")
+
+        components: dict = {
             "system_mode": {
                 "platform": "select",
                 "name": "System Mode",
@@ -178,6 +201,26 @@ class HADiscovery:
                 **self._availability(),
             }
         }
+
+        if ctl_slug:
+            ctl_root = f"{self.root}/system/controllers/{ctl_slug}"
+            for domain_key, label in (
+                ("_domain_f9_dhw",        "DHW"),
+                ("_domain_fa_radiators",  "Radiators"),
+                ("_domain_fc_ufh",        "UFH"),
+            ):
+                uid = f"{self.id_prefix}_relay_demand{domain_key}"
+                components[f"relay_demand{domain_key}"] = {
+                    "platform": "sensor",
+                    "name": f"{label} Demand",
+                    "unique_id": uid,
+                    "object_id": uid,
+                    "state_topic": f"{ctl_root}/relay_demand/{domain_key}",
+                    "value_template": "{{ (value_json.relay_demand * 100) | round(1) }}",
+                    "unit_of_measurement": "%",
+                    "state_class": "measurement",
+                    **self._availability(),
+                }
         payload = {
             "device": {
                 "identifiers": [self.id_prefix],
@@ -285,7 +328,9 @@ class HADiscovery:
             else fallback_state
         )
 
-        components = {
+        relay_slug = self._find_dhw_relay_slug()
+
+        components: dict = {
             "climate": {
                 "platform": "climate",
                 "name": "Hot Water",
@@ -323,6 +368,34 @@ class HADiscovery:
                 **self._availability(),
             }
         }
+
+        if relay_slug:
+            components["relay_active"] = {
+                "platform": "binary_sensor",
+                "name": "Relay",
+                "unique_id": f"{self.id_prefix}_dhw_relay_active",
+                "object_id": f"{self.id_prefix}_dhw_relay_active",
+                "state_topic": f"{dhw_zone_root}/{relay_slug}/actuator_state",
+                "value_template": "{{ 'true' if value_json.modulation_level > 0 else 'false' }}",
+                "payload_on": "true",
+                "payload_off": "false",
+                "device_class": "running",
+                **self._availability(),
+            }
+
+        if sensor_slug:
+            components["battery"] = {
+                "platform": "sensor",
+                "name": "Battery",
+                "unique_id": f"{self.id_prefix}_dhw_battery",
+                "object_id": f"{self.id_prefix}_dhw_battery",
+                "state_topic": f"{dhw_zone_root}/{sensor_slug}/device_battery",
+                "value_template": "{{ (value_json.battery_level * 100) | int }}",
+                "unit_of_measurement": "%",
+                "device_class": "battery",
+                "state_class": "measurement",
+                **self._availability(),
+            }
         dhw_dev_id = f"{self.id_prefix}_zone_HW"
         payload = {
             "device": {
@@ -366,6 +439,9 @@ class HADiscovery:
             )
             via_device = f"{self.id_prefix}_zone_{zone_id}"
 
+        # Relay-type device types that publish under system/relays/
+        _RELAY_TYPES = {"02", "10", "13"}
+
         components: dict = {}
         for sensor in sensors:
             msg_code = sensor["msg_code"]
@@ -373,12 +449,18 @@ class HADiscovery:
             is_binary = sensor.get("binary", False)
 
             if is_system:
-                state_topic = f"{self.root}/system/{dev_alias_slug}/{msg_code}"
+                if dev_type in _RELAY_TYPES:
+                    state_topic = f"{self.root}/system/relays/{dev_alias_slug}/{msg_code}"
+                else:
+                    state_topic = f"{self.root}/system/{dev_alias_slug}/{msg_code}"
             else:
                 zone_slug = to_snake_case(zone_name).lower()
                 state_topic = f"{self.root}/{zones_root}/{zone_slug}/{dev_alias_slug}/{msg_code}"
 
-            uid = f"{self.id_prefix}_{dev_slug}_{field}"
+            # Include msg_code slug in uid to avoid collisions when multiple sensors
+            # share the same field name across different sub-topics (e.g. opentherm_msg/*)
+            msg_code_slug = to_snake_case(msg_code.replace("/", "_"))
+            uid = f"{self.id_prefix}_{dev_slug}_{msg_code_slug}_{field}"
             component: dict = {
                 "platform": "binary_sensor" if is_binary else "sensor",
                 "name": sensor["name"],
@@ -389,7 +471,8 @@ class HADiscovery:
             }
 
             if is_binary:
-                component["value_template"] = f"{{{{ value_json.{field} | lower }}}}"
+                # Respect custom value_template (e.g. derived from modulation_level)
+                component["value_template"] = sensor.get("value_template", f"{{{{ value_json.{field} | lower }}}}")
                 component["payload_on"] = "true"
                 component["payload_off"] = "false"
                 if "class" in sensor:
@@ -400,10 +483,11 @@ class HADiscovery:
                     component["unit_of_measurement"] = sensor["unit"]
                 if "class" in sensor:
                     component["device_class"] = sensor["class"]
-                if "state_class" in sensor:
+                if sensor.get("state_class"):
                     component["state_class"] = sensor["state_class"]
 
-            components[field] = component
+            # Use msg_code+field as key to handle multiple sensors from the same topic
+            components[f"{msg_code_slug}_{field}"] = component
 
         phys_dev_id = f"{self.id_prefix}_{dev_slug}"
         payload = {
@@ -448,6 +532,13 @@ class HADiscovery:
         """Return the snake_case slug of the first registered device of the given type."""
         for dev_id, dev_type in self.registry.type_of_id.items():
             if dev_type == type_code:
+                return to_snake_case(self.registry.friendly_name_of(dev_id)).lower()
+        return None
+
+    def _find_dhw_relay_slug(self) -> str | None:
+        """Return the snake_case slug of the BDR91 relay in the DHW zone (F9 or HW)."""
+        for dev_id, dev_type in self.registry.type_of_id.items():
+            if dev_type == "13" and self.registry.zone_of(dev_id) in ("HW", "F9"):
                 return to_snake_case(self.registry.friendly_name_of(dev_id)).lower()
         return None
 

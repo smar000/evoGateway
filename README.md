@@ -224,10 +224,12 @@ Discovery is published at startup and after every MQTT broker reconnect. When se
 
 | Device | Entities bundled inside |
 |---|---|
-| Gateway | System-wide operating mode select (auto, away, heating off, etc.) |
+| Gateway | System mode select (auto, away, heating off, etc.); DHW, Radiators and UFH relay demand % sensors (from controller) |
 | Heating zone (one per zone) | Climate (temperature + setpoint control), heat demand % sensor |
-| Hot water (DHW) | Climate with heat / auto / off modes |
-| Physical device — TRV, relay, thermostat, DHW sensor (one per device) | Temperature, battery %, window open, actuator state — varies by device type |
+| Hot water (DHW) | Climate (heat / auto / off modes), relay active binary sensor, DHW wireless sender battery % |
+| Physical device — TRV, thermostat, DHW sensor (one per device) | Temperature, battery %, window open, heat demand — varies by device type |
+| Physical device — BDR91 relay (system relays, e.g. radiators) | Actuator state binary sensor (derived from modulation level), heat demand % |
+| Physical device — OpenTherm Bridge | Flame, CH active, DHW active, modulation %; boiler setpoint; boiler/return water temps, CH pressure, modulation level, fault description and OEM fault code (from OpenTherm protocol messages) |
 
 ##### HA device grouping and naming
 
