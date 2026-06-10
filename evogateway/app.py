@@ -9,6 +9,8 @@ and manages the main application loop, including graceful startup and shutdown p
 from __future__ import annotations
 import asyncio
 import datetime as _dt
+import os
+import sys
 from typing import TYPE_CHECKING, Any
 import json
 
@@ -16,7 +18,7 @@ from ramses_rf.version import VERSION as RAMSES_RF_VERSION
 from colorama import init as colorama_init, Fore, Style
 
 # Internal dependencies
-from .config import GATEWAY_VERSION, MQTT_STATUS_SUBTOPIC, GET_SCHED, SET_SCHED
+from .config import GATEWAY_VERSION, MQTT_STATUS_SUBTOPIC, MQTT_ONLINE, GET_SCHED, SET_SCHED
 from .config import AppConfig # Import the entire config object
 from .logger import init_logging
 from .router import MessageRouter
@@ -42,6 +44,8 @@ class EvoGatewayApp:
         self.router: MessageRouter | None = None
         self.ramses: RamsesService | None = None
         self.schedule: ScheduleHandler | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._restart_process: bool = False
 
         self.registry = DeviceRegistry()
 
@@ -135,6 +139,10 @@ class EvoGatewayApp:
         )
         
         try:
+            sys_cmd = str(payload.get("sys_config", "")).upper().strip()
+            if sys_cmd in ("RESTART_RF", "RESTART_GATEWAY", "RESTART_PROCESS"):
+                await self._handle_gateway_command(sys_cmd)
+                return
             if payload.get("command") in (GET_SCHED, SET_SCHED):
                 if self.schedule:
                     await self.schedule.handle_command(payload, self._publish_command_status)
@@ -404,16 +412,150 @@ class EvoGatewayApp:
             # Discovery disabled — remove any retained entries left from a previous run
             await self._ha_discovery.remove_all()
 
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
-            while True:
-                await asyncio.sleep(3600)
+            await self._heartbeat_task
 
         except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             print("Shutting down…")
 
         finally:
             await self.shutdown()
+            if self._restart_process:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
             raise SystemExit
+
+    async def _handle_gateway_command(self, cmd: str) -> None:
+        """Handle MQTT-triggered gateway management commands."""
+        self.log.info(f"Gateway management command: {cmd}")
+        self._publish_command_status(cmd, "Transmitted")
+
+        if cmd == "RESTART_RF":
+            if not self.ramses:
+                self._publish_command_status(cmd, "Failed", error="Ramses not running")
+                return
+            try:
+                if self.mqtt:
+                    self.mqtt.publish_status("RF Restarting")
+                await self.ramses.restart()
+                self._publish_command_status(cmd, "Successful")
+                if self.mqtt:
+                    self.mqtt.publish_status(MQTT_ONLINE)
+            except Exception as ex:
+                self.log.exception("RF restart failed")
+                self._publish_command_status(cmd, "Failed", error=str(ex))
+
+        elif cmd in ("RESTART_GATEWAY", "RESTART_PROCESS"):
+            if cmd == "RESTART_PROCESS":
+                self._restart_process = True
+            self._publish_command_status(cmd, "Successful")
+            self.log.warning(
+                f"{'Full process' if cmd == 'RESTART_PROCESS' else 'Gateway service'} restart requested via MQTT"
+            )
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+            else:
+                raise SystemExit(1)
+
+    async def _heartbeat_loop(self) -> None:
+        """Periodic MQTT heartbeat and three-stage RF watchdog.
+
+        Each stage is independently optional: set its timeout to 0 to disable it.
+        Stages are also independent of each other — Stage 2 does not require Stage 1
+        to have fired first, so users can skip straight to restart without a warn.
+        """
+        cfg = self.cfg.watchdog
+        last_heartbeat_at: _dt.datetime | None = None
+        rf_warned = False
+        rf_restarted = False
+        restart_at: _dt.datetime | None = None
+
+        # Lowest non-zero RF threshold; used to detect recovery (real messages arriving)
+        _recovery_threshold = next(
+            (t for t in sorted([cfg.rf_warn_timeout, cfg.rf_restart_timeout]) if t > 0), 0
+        )
+
+        while True:
+            await asyncio.sleep(60)
+            now = local_now(self.cfg.misc.use_local_time)
+
+            # --- MQTT heartbeat (disabled when interval == 0) ---
+            if cfg.mqtt_heartbeat_interval > 0 and self.mqtt and (
+                last_heartbeat_at is None
+                or (now - last_heartbeat_at).total_seconds() >= cfg.mqtt_heartbeat_interval
+            ):
+                self.mqtt.publish_status(MQTT_ONLINE)
+                last_heartbeat_at = now
+
+            # --- RF watchdog ---
+            if not (self.ramses and self.ramses.last_rf_message_ts):
+                continue
+
+            silence = (now - self.ramses.last_rf_message_ts).total_seconds()
+
+            # Recovery: real RF messages arrived (silence dropped below the first threshold)
+            if (rf_warned or rf_restarted) and _recovery_threshold > 0 and silence < _recovery_threshold:
+                msg = f"RF communication restored (was silent for {silence:.0f}s)"
+                self.log.info(msg)
+                print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("INFO", ""), min_row_length=self.cfg.misc.min_row_length)
+                if self.mqtt:
+                    self.mqtt.publish_status(MQTT_ONLINE)
+                rf_warned = False
+                rf_restarted = False
+                restart_at = None
+                continue
+
+            # Stages 3 & 4: both measured from when Stage 2 (RF restart) was attempted
+            if rf_restarted and restart_at:
+                elapsed = (now - restart_at).total_seconds()
+
+                # Stage 3: restart the whole process (disabled when rf_process_restart_timeout == 0)
+                if cfg.rf_process_restart_timeout > 0 and elapsed >= cfg.rf_process_restart_timeout:
+                    msg = f"RF watchdog: still silent {elapsed:.0f}s after RF restart - attempting full process restart"
+                    self.log.critical(msg)
+                    print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("ERROR", ""), min_row_length=self.cfg.misc.min_row_length)
+                    if self.mqtt:
+                        self.mqtt.publish_status("Restarting")
+                    self._restart_process = True
+                    raise SystemExit(1)
+
+                # Stage 4: give up and let the process manager restart us
+                # (disabled when rf_exit_timeout == 0; only reachable if Stage 3 is disabled
+                # or rf_exit_timeout < rf_process_restart_timeout)
+                if cfg.rf_exit_timeout > 0 and elapsed >= cfg.rf_exit_timeout:
+                    msg = f"RF watchdog: still silent {elapsed:.0f}s after RF restart - exiting for systemd restart"
+                    self.log.critical(msg)
+                    print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("ERROR", ""), min_row_length=self.cfg.misc.min_row_length)
+                    raise SystemExit(1)
+
+                continue  # still within post-restart wait window
+
+            # Stage 2: restart RF layer (independent of Stage 1; disabled when rf_restart_timeout == 0)
+            if cfg.rf_restart_timeout > 0 and not rf_restarted and silence >= cfg.rf_restart_timeout:
+                msg = f"RF watchdog: silent for {silence/60:.1f} min - attempting RF layer restart"
+                self.log.error(msg)
+                print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("ERROR", ""), min_row_length=self.cfg.misc.min_row_length)
+                if self.mqtt:
+                    self.mqtt.publish_status("RF Restarting")
+                try:
+                    await self.ramses.restart()
+                    rf_restarted = True
+                    restart_at = local_now(self.cfg.misc.use_local_time)
+                    msg = "RF watchdog: RF layer restart completed"
+                    self.log.info(msg)
+                    print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("INFO", ""), min_row_length=self.cfg.misc.min_row_length)
+                except Exception:
+                    self.log.exception("RF watchdog: RF layer restart failed")
+                continue
+
+            # Stage 1: warn (disabled when rf_warn_timeout == 0)
+            if cfg.rf_warn_timeout > 0 and not rf_warned and silence >= cfg.rf_warn_timeout:
+                msg = f"RF watchdog: silent for {silence/60:.1f} min - no messages received"
+                self.log.warning(msg)
+                print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("INFO", ""), min_row_length=self.cfg.misc.min_row_length)
+                if self.mqtt:
+                    self.mqtt.publish_status("RF Timeout")
+                rf_warned = True
 
     async def shutdown(self) -> None:
         # If eavesdrop OR discovery active -> print/save schema

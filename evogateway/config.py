@@ -17,7 +17,7 @@ from colorama import Fore, Back, Style # For DEFAULT_COLOURS only
 import logging
 
 # Constants & defaults
-GATEWAY_VERSION = "4.4.1-0.52.1"
+GATEWAY_VERSION = "4.5.0-0.52.1"
 
 CONFIG_DIR_NAME: Final[Path] = Path("config")
 LOGS_DIR_NAME: Final[Path] = Path("logs")
@@ -275,6 +275,21 @@ class RamsesConfig:
     enable_eavesdrop: bool = False
     known_list: bool = True
 
+
+@dataclass
+class WatchdogConfig:
+    # How often (seconds) to re-publish the MQTT Online heartbeat.
+    # Set to 0 to disable the heartbeat entirely.
+    mqtt_heartbeat_interval: int = 300      # 5 min
+
+    # RF silence thresholds. Set any value to 0 to disable that stage.
+    # Stage 2 is independent of Stage 1 (does not require Stage 1 to have fired).
+    # Stages 3 and 4 are measured from when Stage 2 (RF restart) was attempted.
+    rf_warn_timeout: int = 900              # 15 min from last RF msg  → Stage 1: warn
+    rf_restart_timeout: int = 1800          # 30 min from last RF msg  → Stage 2: restart RF layer
+    rf_process_restart_timeout: int = 900   # 15 min after Stage 2     → Stage 3: restart process
+    rf_exit_timeout: int = 1800             # 30 min after Stage 2     → Stage 4: raise SystemExit
+
 @dataclass
 class MiscConfig:
     this_gateway_name: str = "evoGateway"
@@ -293,6 +308,7 @@ class AppConfig:
     mqtt: MqttConfig
     ramses: RamsesConfig
     misc: MiscConfig
+    watchdog: WatchdogConfig = field(default_factory=WatchdogConfig)
 
     @classmethod
     def load(cls, path: Optional[Path] = None) -> "AppConfig":
@@ -387,7 +403,15 @@ class AppConfig:
             use_local_time=parser.getboolean("Misc", "USE_LOCAL_TIME", fallback=False),
         )
 
-        return cls(serial=serial, files=files, mqtt=mqtt, ramses=ramses, misc=misc)
+        watchdog = WatchdogConfig(
+            mqtt_heartbeat_interval=parser.getint("Watchdog", "MQTT_HEARTBEAT_INTERVAL", fallback=300),
+            rf_warn_timeout=parser.getint("Watchdog", "RF_WARN_TIMEOUT", fallback=900),
+            rf_restart_timeout=parser.getint("Watchdog", "RF_RESTART_TIMEOUT", fallback=1800),
+            rf_process_restart_timeout=parser.getint("Watchdog", "RF_PROCESS_RESTART_TIMEOUT", fallback=900),
+            rf_exit_timeout=parser.getint("Watchdog", "RF_EXIT_TIMEOUT", fallback=1800),
+        )
+
+        return cls(serial=serial, files=files, mqtt=mqtt, ramses=ramses, misc=misc, watchdog=watchdog)
 
 def _ensure_colour_scheme(raw_value: str | None) -> dict[str, str]:
     """

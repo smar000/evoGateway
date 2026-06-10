@@ -147,6 +147,44 @@ KNOWN_LIST = True
 
 
 #------------------------------------------------------------------------------
+# WATCHDOG SETTINGS
+#------------------------------------------------------------------------------
+[Watchdog]
+
+# How often (seconds) to re-publish the MQTT Online heartbeat on the status topic.
+# Consumers (e.g. Home Assistant) can compare the status_ts field against wall
+# clock to detect a stale gateway even when MQTT stays connected.
+# Set to 0 to disable the heartbeat entirely.
+MQTT_HEARTBEAT_INTERVAL = 300
+
+# RF silence thresholds — all measured in seconds from the last received RF message.
+# Set any value to 0 to disable that stage. Stages are independent — Stage 2
+# does not require Stage 1 to have fired first.
+#
+# Stage 1 – Warning: log a warning and publish status "RF Timeout" to MQTT.
+#            Set to 0 to disable.
+RF_WARN_TIMEOUT = 900
+
+# Stage 2 – RF Restart: attempt to restart the RF (ramses_rf) layer only.
+#            Fires when silence >= RF_RESTART_TIMEOUT regardless of Stage 1.
+#            Set to 0 to disable (also disables Stages 3 and 4).
+RF_RESTART_TIMEOUT = 1800
+
+# Stages 3 and 4 are both measured from when the Stage 2 RF restart was attempted.
+
+# Stage 3 – Process Restart: restart the whole Python process via os.execv
+#            (no external process manager needed). Set to 0 to disable.
+RF_PROCESS_RESTART_TIMEOUT = 900
+
+# Stage 4 – Exit: raise SystemExit so the process manager (e.g. systemd) can
+#            restart the whole service. Only reachable if Stage 3 is disabled
+#            or RF_EXIT_TIMEOUT < RF_PROCESS_RESTART_TIMEOUT.
+#            Set to 0 to disable.
+RF_EXIT_TIMEOUT = 1800
+
+
+
+#------------------------------------------------------------------------------
 # MISCELLANEOUS SETTINGS
 #------------------------------------------------------------------------------
 [Misc]

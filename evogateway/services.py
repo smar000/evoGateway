@@ -100,7 +100,6 @@ class MQTTService:
             self.log.error(f"MQTT connect failed: {e}", exc_info=True)
             return False
         self._client.loop_start()
-        self.publish_status(MQTT_ONLINE)
         return True
 
     def stop(self) -> None:
@@ -113,6 +112,7 @@ class MQTTService:
 
     def _on_connect(self, client, userdata, flags, reason_code, properties):
         self.log.info(f"Connected to MQTT broker with reason code: {reason_code}")
+        self.publish_status(MQTT_ONLINE)
         if self.cmd_topic:
             # Robust topic joining for command subscription
             sub_topic = "/".join(filter(None, [self.root_topic.strip("/"), self.cmd_topic.strip("/")]))
@@ -207,6 +207,9 @@ class RamsesService:
         self.zones: Dict[str, str] = {}
         self.ufh_circuits: Dict[str, Dict[str, Any]] = {}
 
+        # RF watchdog: timestamp of last received RF message (None until gwy starts)
+        self.last_rf_message_ts: Optional[_dt.datetime] = None
+
     async def start(self) -> None:
         self.log.debug("LIB KWARGS SCHEMA:", json.dumps(self.lib_kwargs.get("schema"), indent=2))
 
@@ -231,8 +234,24 @@ class RamsesService:
         self._last_dev_count = len(self.gwy.device_by_id)
         self._last_zone_count = len(self.gwy.tcs.zone_by_idx) if self.gwy.tcs else 0
 
+        # Arm the RF watchdog from gateway-ready time, not first message
+        self.last_rf_message_ts = _dt.datetime.now().astimezone()
+
     async def stop(self) -> None:
         pass
+
+    async def restart(self) -> None:
+        """Stop and restart the ramses_rf Gateway (RF layer only, no process exit)."""
+        if self.gwy:
+            try:
+                await self.gwy.stop()
+            except Exception:
+                self.log.warning("Error stopping gateway during RF restart", exc_info=True)
+        self.gwy = Gateway(self.serial_port, **self.lib_kwargs)
+        self.gwy.add_msg_handler(self._handle_gwy_message)
+        await self.gwy.start()
+        # Intentionally do NOT reset last_rf_message_ts here — the watchdog
+        # measures silence from the last real RF message, not from the restart time.
 
     def _check_discovery_updates(self):
         dev_count = len(self.gwy.device_by_id)
@@ -532,6 +551,7 @@ class RamsesService:
         raise CommandSendError(msg)
 
     def _handle_gwy_message(self, msg) -> None:
+        self.last_rf_message_ts = _dt.datetime.now().astimezone()
         try:
             msg.code_name = CODE_NAMES.get(msg.code, getattr(msg, "code_name", str(msg.code)))
         except Exception:

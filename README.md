@@ -273,6 +273,32 @@ This publishes empty retained payloads to every discovery topic, which instructs
 
 ---
 
+#### **Watchdog Settings**
+
+evoGateway includes two watchdog mechanisms:
+
+* **MQTT heartbeat** — periodically republishes the `Online` status so consumers (e.g. Home Assistant) can detect a stale-but-connected gateway by comparing the `status_ts` field against wall clock.
+* **RF silence detector** — monitors the time since the last RF message was received and escalates through up to four stages if the radio goes quiet:
+  1. **Warn** — log a warning and publish status `RF Timeout` to MQTT.
+  2. **Restart RF** — restart the ramses_rf layer only, without exiting the process.
+  3. **Restart process** — restart the whole Python process via `os.execv` (no external process manager needed).
+  4. **Exit** — raise `SystemExit` so the process manager (e.g. systemd) can restart the service.
+
+Each stage is individually optional (set its timeout to `0` to skip it). The RF restart and process restart stages can also be triggered manually via MQTT — see [System Commands](#6-system-commands).
+
+> **systemd and Docker behaviour**
+> The **restart process** stage replaces the running Python process in-place via `os.execv` — the container or service wrapper never sees an exit, so no external restart is needed. The **exit** stage raises `SystemExit`, which *does* cause the process to terminate; both systemd (`Restart=on-failure`) and Docker (`restart: unless-stopped`) will automatically bring it back up. When running under Docker the provided `docker-compose.yml` already has the correct restart policy set.
+
+All thresholds are configured in the `[Watchdog]` section of `evogateway.cfg`:
+
+| Parameter | Default | Description |
+|---|---|---|
+| `MQTT_HEARTBEAT_INTERVAL` | `300` | Seconds between heartbeat re-publishes of `Online` to the status topic. Set to `0` to disable the heartbeat entirely. |
+| `RF_WARN_TIMEOUT` | `900` | Seconds of RF silence before **warning**: logs a warning and publishes status `RF Timeout`. Set to `0` to disable. |
+| `RF_RESTART_TIMEOUT` | `1800` | Seconds of RF silence before **restarting the RF layer** (ramses_rf only, no process exit). Fires independently — does not require the warn stage to be enabled. Set to `0` to disable (also disables the process restart and exit stages, which depend on this one). |
+| `RF_PROCESS_RESTART_TIMEOUT` | `900` | Seconds after the RF restart before **restarting the whole process** via `os.execv`. Set to `0` to skip this stage and go straight to the exit stage. |
+| `RF_EXIT_TIMEOUT` | `1800` | Seconds after the RF restart before **exiting** so the process manager can restart the service. Only reached if the process restart stage is disabled, or if `RF_EXIT_TIMEOUT` is set lower than `RF_PROCESS_RESTART_TIMEOUT`. Set to `0` to disable. |
+
 #### **Misc / Logging Settings**
 
 * `LOG_LEVEL` — verbosity of the event log (`DEBUG`, `INFO`, `WARNING`, `ERROR`)
@@ -622,16 +648,28 @@ These use a `sys_config` key instead of `command`:
 
 Currently supported (subject to change as the gateway evolves):
 
-* `POST_SCHEMA`
-  Publishes the current schema, parameters, and status from `ramses_rf` to the `_gateway_config` subtree under the system topic.
-
-* `SAVE_SCHEMA`
-  As above, and additionally saves the current schema back to the `ramses_rf_schema.json` file.
-
-* `REMOVE_HA_DISCOVERY`
-  Removes all evoGateway MQTT discovery entries from Home Assistant by publishing empty retained payloads to every discovery topic. Use this before a reconfiguration (e.g. renaming zones) or when uninstalling. See the [Home Assistant MQTT Discovery](#home-assistant-mqtt-discovery) section for details.
+| Command | Description |
+|---|---|
+| `POST_SCHEMA` | Publishes the current schema, parameters, and status from `ramses_rf` to the `_gateway_config` subtree under the system topic. |
+| `SAVE_SCHEMA` | As above, and additionally saves the current schema back to the `ramses_rf_schema.json` file. |
+| `REMOVE_HA_DISCOVERY` | Removes all evoGateway MQTT discovery entries from Home Assistant by publishing empty retained payloads to every discovery topic. Use this before a reconfiguration (e.g. renaming zones) or when uninstalling. See the [Home Assistant MQTT Discovery](#home-assistant-mqtt-discovery) section for details. |
+| `RESTART_RF` | Restarts the RF layer (ramses_rf Gateway) without exiting the process. Equivalent to watchdog Stage 2. Published status `RF Restarting` while in progress, then `Online` on success. Use this if the evohome radio appears stuck. |
+| `RESTART_GATEWAY` | Performs a clean shutdown and raises `SystemExit`, allowing the process manager (e.g. systemd) to restart the service. Equivalent to watchdog Stage 3. |
+| `RESTART_PROCESS` | Performs a clean shutdown and then restarts the Python process directly via `os.execv`, without relying on an external process manager. Use this on systems without a service supervisor. |
 
 These operations are local to evoGateway and are not forwarded on the RF network.
+
+**Example — manually restart the RF layer:**
+
+```json
+{"sys_config": "RESTART_RF"}
+```
+
+**Example — restart the whole gateway process (no systemd required):**
+
+```json
+{"sys_config": "RESTART_PROCESS"}
+```
 
 ---
 
