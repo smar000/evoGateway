@@ -526,6 +526,8 @@ class EvoGatewayApp:
                     msg = f"RF watchdog: still silent {elapsed:.0f}s after RF restart - exiting for systemd restart"
                     self.log.critical(msg)
                     print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("ERROR", ""), min_row_length=self.cfg.misc.min_row_length)
+                    if self.mqtt:
+                        self.mqtt.publish_status("Offline")
                     raise SystemExit(1)
 
                 continue  # still within post-restart wait window
@@ -544,8 +546,12 @@ class EvoGatewayApp:
                     msg = "RF watchdog: RF layer restart completed"
                     self.log.info(msg)
                     print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("INFO", ""), min_row_length=self.cfg.misc.min_row_length)
+                    if self.mqtt:
+                        self.mqtt.publish_status("RF Restarted")
                 except Exception:
                     self.log.exception("RF watchdog: RF layer restart failed")
+                    if self.mqtt:
+                        self.mqtt.publish_status("RF Restart Failed")
                 continue
 
             # Stage 1: warn (disabled when rf_warn_timeout == 0)
