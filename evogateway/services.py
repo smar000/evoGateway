@@ -238,15 +238,22 @@ class RamsesService:
         self.last_rf_message_ts = _dt.datetime.now().astimezone()
 
     async def stop(self) -> None:
-        pass
-
-    async def restart(self) -> None:
-        """Stop and restart the ramses_rf Gateway (RF layer only, no process exit)."""
+        """Stop the ramses_rf Gateway and release the serial port."""
         if self.gwy:
             try:
                 await self.gwy.stop()
             except Exception:
-                self.log.warning("Error stopping gateway during RF restart", exc_info=True)
+                self.log.warning("Error stopping gateway", exc_info=True)
+
+    async def restart(self) -> None:
+        """Stop and restart the ramses_rf Gateway (RF layer only, no process exit).
+
+        A short delay between stop and start gives the USB-to-serial adapter and
+        evofw3 firmware time to reset cleanly — without it the firmware can come
+        back in an intermediate state and silently stop transmitting RF messages.
+        """
+        await self.stop()
+        await asyncio.sleep(2)
         self.gwy = Gateway(self.serial_port, **self.lib_kwargs)
         self.gwy.add_msg_handler(self._handle_gwy_message)
         await self.gwy.start()
