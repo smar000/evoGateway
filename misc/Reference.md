@@ -139,7 +139,7 @@ graph TD
 | `_build_ramses_config` | Prepares configuration for the `ramses_rf` library (loads schema if exists). |
 | `run` | **Main Loop.** Starts MQTT, Router, Ramses services, and keeps the app alive. |
 | `shutdown` | Gracefully stops services and saves the schema. |
-| `_on_mqtt_message` | Callback for inbound MQTT messages. Routes to `ScheduleHandler` or `RamsesService`. |
+| `_on_mqtt_message` | Callback for inbound MQTT messages. Gateway management commands (`RESTART_*`) are not executed if the message is retained — the retained message is auto-cleared from the broker and a warning is logged. Routes other commands to `ScheduleHandler` or `RamsesService`. |
 | `_publish_command_status` | Publishes ACK/NACK status of commands back to MQTT. |
 | `_publish_schema_snapshot` | Publishes the full system state (schema, devices, params) to MQTT. |
 | `_print_gateway_schema` | Prints the current schema to the console (for debugging/shutdown). |
@@ -325,6 +325,7 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 
         * Builds a full **TopicLayout** object used everywhere.
       * **RamsesConfig**: discovery/eavesdrop/sending settings.
+      * **WatchdogConfig**: heartbeat/watchdog loop settings — `WATCHDOG_CHECK_INTERVAL` (poll frequency, default 60 s; `0` disables everything), `MQTT_HEARTBEAT_INTERVAL`, and the four RF silence thresholds (`RF_WARN_TIMEOUT`, `RF_RESTART_TIMEOUT`, `RF_PROCESS_RESTART_TIMEOUT`, `RF_EXIT_TIMEOUT`). All RF thresholds are accurate to ±`WATCHDOG_CHECK_INTERVAL`.
       * **MiscConfig**: output formatting, colours, gateway name.
       * **AppConfig**: master object combining all config sections.
 

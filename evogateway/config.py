@@ -17,7 +17,7 @@ from colorama import Fore, Back, Style # For DEFAULT_COLOURS only
 import logging
 
 # Constants & defaults
-GATEWAY_VERSION = "4.5.1-0.52.1"
+GATEWAY_VERSION = "4.5.2-0.52.1"
 
 CONFIG_DIR_NAME: Final[Path] = Path("config")
 LOGS_DIR_NAME: Final[Path] = Path("logs")
@@ -278,6 +278,12 @@ class RamsesConfig:
 
 @dataclass
 class WatchdogConfig:
+    # Poll interval (seconds) for the heartbeat/watchdog loop.
+    # All RF timeout thresholds are accurate to within ±this value.
+    # MQTT_HEARTBEAT_INTERVAL should be >= this value for accurate timing.
+    # Set to 0 to disable both the MQTT heartbeat and all watchdog stages entirely.
+    watchdog_check_interval: int = 60       # 1 min
+
     # How often (seconds) to re-publish the MQTT Online heartbeat.
     # Set to 0 to disable the heartbeat entirely.
     mqtt_heartbeat_interval: int = 300      # 5 min
@@ -404,6 +410,7 @@ class AppConfig:
         )
 
         watchdog = WatchdogConfig(
+            watchdog_check_interval=parser.getint("Watchdog", "WATCHDOG_CHECK_INTERVAL", fallback=60),
             mqtt_heartbeat_interval=parser.getint("Watchdog", "MQTT_HEARTBEAT_INTERVAL", fallback=300),
             rf_warn_timeout=parser.getint("Watchdog", "RF_WARN_TIMEOUT", fallback=900),
             rf_restart_timeout=parser.getint("Watchdog", "RF_RESTART_TIMEOUT", fallback=1800),

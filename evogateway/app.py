@@ -129,7 +129,7 @@ class EvoGatewayApp:
         return self.cfg.serial.port, lib_cfg
 
     # MQTT inbound
-    async def _on_mqtt_message(self, payload: dict) -> None:
+    async def _on_mqtt_message(self, payload: dict, is_retained: bool = False) -> None:
         self.log.info(f"MQTT message received: {payload}")
         style = self.cfg.misc.display_colours.get("MQTT", "")
         print_formatted_row(
@@ -137,10 +137,14 @@ class EvoGatewayApp:
             style_prefix=style,
             min_row_length=self.cfg.misc.min_row_length,
         )
-        
+
         try:
             sys_cmd = str(payload.get("sys_config", "")).upper().strip()
             if sys_cmd in ("RESTART_RF", "RESTART_GATEWAY", "RESTART_PROCESS"):
+                if is_retained:
+                    self.log.warning(f"Clearing stale retained gateway command '{sys_cmd}' from broker — command will not be executed")
+                    self.mqtt.publish(self.cfg.mqtt.cmd_topic, "", retain=True)
+                    return
                 await self._handle_gateway_command(sys_cmd)
                 return
             if payload.get("command") in (GET_SCHED, SET_SCHED):
@@ -463,8 +467,16 @@ class EvoGatewayApp:
         Each stage is independently optional: set its timeout to 0 to disable it.
         Stages are also independent of each other — Stage 2 does not require Stage 1
         to have fired first, so users can skip straight to restart without a warn.
+
+        The poll interval (WATCHDOG_CHECK_INTERVAL) controls how often this loop
+        wakes up. All timeout thresholds are accurate to within ±that interval.
+        Set WATCHDOG_CHECK_INTERVAL = 0 to disable both the heartbeat and watchdog.
         """
         cfg = self.cfg.watchdog
+
+        if cfg.watchdog_check_interval <= 0:
+            return
+
         last_heartbeat_at: _dt.datetime | None = None
         rf_warned = False
         rf_restarted = False
@@ -476,7 +488,7 @@ class EvoGatewayApp:
         )
 
         while True:
-            await asyncio.sleep(60)
+            await asyncio.sleep(cfg.watchdog_check_interval)
             now = local_now(self.cfg.misc.use_local_time)
 
             # --- MQTT heartbeat (disabled when interval == 0) ---

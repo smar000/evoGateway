@@ -130,7 +130,9 @@ class MQTTService:
             self.log.error("MQTT message is not JSON")
             return
         if self._on_message_async:
-            asyncio.run_coroutine_threadsafe(self._on_message_async(payload), self._loop)
+            asyncio.run_coroutine_threadsafe(
+                self._on_message_async(payload, is_retained=bool(msg.retain)), self._loop
+            )
 
     def publish_status(self, status: str) -> None:
         # Use pure formatter, then publish (no behaviour change)

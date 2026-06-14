@@ -293,7 +293,8 @@ All thresholds are configured in the `[Watchdog]` section of `evogateway.cfg`:
 
 | Parameter | Default | Description |
 |---|---|---|
-| `MQTT_HEARTBEAT_INTERVAL` | `300` | Seconds between heartbeat re-publishes of `Online` to the status topic. Set to `0` to disable the heartbeat entirely. |
+| `WATCHDOG_CHECK_INTERVAL` | `60` | Seconds between heartbeat/watchdog loop iterations. All RF timeout thresholds are accurate to within ±this value. `MQTT_HEARTBEAT_INTERVAL` should be ≥ this value for accurate heartbeat timing. Set to `0` to disable both the MQTT heartbeat and all watchdog stages entirely. |
+| `MQTT_HEARTBEAT_INTERVAL` | `300` | Seconds between heartbeat re-publishes of `Online` to the status topic. Should be ≥ `WATCHDOG_CHECK_INTERVAL`. Set to `0` to disable the heartbeat entirely. |
 | `RF_WARN_TIMEOUT` | `900` | Seconds of RF silence before **warning**: logs a warning and publishes status `RF Timeout`. Set to `0` to disable. |
 | `RF_RESTART_TIMEOUT` | `1800` | Seconds of RF silence before **restarting the RF layer** (ramses_rf only, no process exit). Fires independently — does not require the warn stage to be enabled. Set to `0` to disable (also disables the process restart and exit stages, which depend on this one). |
 | `RF_PROCESS_RESTART_TIMEOUT` | `900` | Seconds after the RF restart before **restarting the whole process** via `os.execv`. Set to `0` to skip this stage and go straight to the exit stage. |
@@ -658,6 +659,8 @@ Currently supported (subject to change as the gateway evolves):
 | `RESTART_PROCESS` | Performs a clean shutdown and then restarts the Python process directly via `os.execv`, without relying on an external process manager. Use this on systems without a service supervisor. |
 
 These operations are local to evoGateway and are not forwarded on the RF network.
+
+> **Note:** Gateway management commands (`RESTART_RF`, `RESTART_GATEWAY`, `RESTART_PROCESS`) are **not executed** if they arrive as **retained** MQTT messages. Instead, the retained message is automatically cleared from the broker and a warning is logged. This prevents a stale command left on the broker from restarting the gateway every time it starts up. To send one of these commands intentionally, publish it as a non-retained message.
 
 **Example — manually restart the RF layer:**
 
