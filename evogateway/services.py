@@ -36,6 +36,7 @@ from ramses_rf.exceptions import ExpiredCallbackError
 from .registry import DeviceRegistry
 
 from .config import (
+    GATEWAY_VERSION,
     MQTT_OFFLINE,
     MQTT_ONLINE,
     SEND_STATUS_FAILED,
@@ -164,7 +165,8 @@ class MQTTService:
 
     def format_status_payload(self, status: str) -> dict:
         """Format status payload, using local time if configured."""
-        return {"status": status, "status_ts": _dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S") if self.use_local_time else _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")}
+        ts = _dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S") if self.use_local_time else _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        return {"status": status, "status_ts": ts, "version": GATEWAY_VERSION}
 
     def _build_status_payload(self, status: str) -> dict:
         """Backwards-compatible alias: delegate to format_status_payload()."""
