@@ -733,4 +733,27 @@ Look for the method `topic_base`.
 1.  **Simple RAMSES command:** If `ramses_rf` supports it, you don't need to change code. Just send the JSON command (see `README.md`).
 2.  **Complex Logic:** Go to **`evogateway/services.py`** $\rightarrow$ `RamsesService.process_command`.
 
+---
+
+## Known Issues / Library Compatibility Notes
+
+### ramses_rf 0.57.0 — W command echo causes AssertionError in internal handler
+
+**Symptom (without workaround):** Every time a W command is sent (e.g. `set_dhw_mode`, `set_zone_setpoint`), an `"Exception in callback"` traceback appears in the log:
+
+```
+Exception in callback Controller._handle_msg(...)
+AssertionError: msg inappropriately routed to 01:xxxxxx_HW (DHW)
+```
+
+**Root cause:** When we transmit a W command, evofw3 echoes the packet back to the serial port. ramses_rf's internal `_msg_handler` receives that echo and routes it through `Controller._handle_msg → TCS._handle_msg → DhwZone._handle_msg`. The DHW zone handler asserts that any incoming message for it must either come from the controller (`msg.src == self.ctl`) or carry a `domain_id`/`zone_idx` in the parsed payload. The echo has `src = 18:xxx` (our HGI) — not the controller — and the `1F41` parser in 0.57.0 does not include `domain_id` or `zone_idx` in its output, so all three assertion conditions fail.
+
+**Impact:** None on functionality. The W command is transmitted correctly and the controller processes it. The crash is only in the library's internal echo bookkeeping; our `_handle_gwy_message` callback runs independently and is unaffected.
+
+**Workaround (applied in `app.py → EvoGatewayApp.run()`):** A narrow custom asyncio exception handler intercepts only `AssertionError` exceptions whose message contains `"inappropriately routed"` (the exact text in `ramses_rf/systems/zones.py`). These are logged at DEBUG level instead of printing a full traceback. All other exceptions pass through to the default handler unchanged.
+
+**Upstream status:** Bug fixed in [ramses_rf PR #695](https://github.com/ramses-rf/ramses_rf/pull/695) (merged). The fix adds `"18"` (HGI Gateway) and `"30"` (RFG100 Gateway) to the permitted device-type tuple in the `Zone._handle_msg` assertion in `systems/zones.py`. As of 2026-06-15, the fix is merged into the main branch but **not yet released on PyPI** — `0.57.0` is still the latest published version.
+
+**When upgrading ramses_rf:** If the installed version is newer than `0.57.0`, remove the custom exception handler block from `app.py → EvoGatewayApp.run()` and verify W commands no longer produce assertion noise before deploying.
+
 

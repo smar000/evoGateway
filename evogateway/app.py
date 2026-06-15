@@ -323,6 +323,43 @@ class EvoGatewayApp:
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
 
+        # ── ramses_rf 0.57.0 compatibility workaround ────────────────────────────
+        # When we send a W command (e.g. set_dhw_mode), evofw3 echoes the packet
+        # back to us.  ramses_rf's internal _msg_handler processes that echo and
+        # routes it through Controller._handle_msg → TCS._handle_msg →
+        # DhwZone._handle_msg.  The DHW zone handler asserts:
+        #
+        #   assert (msg.src == self.ctl and msg.code in (..., Code._1F41, ...)
+        #           or msg.payload.get("domain_id") in ("F9", "FA")
+        #           or msg.payload.get("zone_idx") == "HW")
+        #
+        # The echo has src=18:xxx (our HGI, not the controller), and the 1F41
+        # parser in 0.57.0 does not include domain_id/zone_idx in its output, so
+        # all three conditions fail → AssertionError.
+        #
+        # This is a bug in ramses_rf 0.57.0 (reported upstream).  The W command IS
+        # transmitted and processed correctly by the controller; the crash is only
+        # in the library's internal echo bookkeeping and has no effect on our
+        # routing layer (our _handle_gwy_message runs independently).
+        #
+        # The only symptom visible to us is a full "Exception in callback" traceback
+        # printed to stderr on every W send.  We suppress it here by installing a
+        # narrow custom exception handler that intercepts only AssertionErrors whose
+        # message contains "inappropriately routed" (the exact text in zones.py).
+        # All other exceptions pass through to the default handler unchanged.
+        _prev_exc_handler = self.loop.get_exception_handler()
+        def _exc_handler(loop: asyncio.AbstractEventLoop, ctx: dict) -> None:
+            exc = ctx.get("exception")
+            if isinstance(exc, AssertionError) and "inappropriately routed" in str(exc):
+                self.log.debug(f"Suppressed ramses_rf 0.57.0 routing assertion: {exc}")
+                return
+            if _prev_exc_handler is not None:
+                _prev_exc_handler(loop, ctx)
+            else:
+                loop.default_exception_handler(ctx)
+        self.loop.set_exception_handler(_exc_handler)
+        # ─────────────────────────────────────────────────────────────────────────
+
         # MQTT (threaded)
         self.mqtt = MQTTService(
             server=self.cfg.mqtt.server,
