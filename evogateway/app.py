@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 import json
 
 from ramses_rf.version import VERSION as RAMSES_RF_VERSION
+from ramses_rf.config import GatewayConfig
+from ramses_tx.config import EngineConfig
 from colorama import init as colorama_init, Fore, Style
 
 # Internal dependencies
@@ -78,56 +80,56 @@ class EvoGatewayApp:
             logger=self.log
         ) # Injecting the router and callbacks
 
-    def _build_ramses_config(self) -> tuple[str, dict[str, Any]]:
-        """
-        Build kwargs for ramses_rf.Gateway, pulling schema from PersistenceService, with fallback to discovery.
-        """
-
-        # Force discovery if we don't have a schema file or if disable discovery overridden in config file 
+    def _build_ramses_config(self) -> GatewayConfig:
+        """Build a GatewayConfig for ramses_rf.Gateway, loading schema with fallback to discovery."""
         discovery_disabled = not self.persistence.schema_exists() or self.cfg.ramses.disable_discovery
+        disable_discovery = discovery_disabled
+        enable_eavesdrop = not discovery_disabled or self.cfg.ramses.enable_eavesdrop
+        enforce_known_list = False
 
-        # Root library kwargs structure
-        lib_cfg: dict[str, Any] = {
-            "config": {
-                "disable_sending": self.cfg.ramses.disable_sending,
-                "disable_discovery": discovery_disabled,
-                "enable_eavesdrop": not discovery_disabled or self.cfg.ramses.enable_eavesdrop,
-                "enforce_known_list": False,
-                "max_zones": 12,
-                "use_aliases": True,
-            }
-        }
-        
+        schema: dict[str, Any] = {}
+        known_list: dict[str, Any] = {}
+        block_list: dict[str, Any] = {}
+
         if discovery_disabled:
-            # Try to load from schema file
-            schema = self.persistence.load_schema()
-            has_schema = bool(schema)
-        
-            if has_schema:
-                lib_cfg.update(schema)                
-                # Config file flags take priority 
-                lib_cfg["config"]["disable_discovery"] = self.cfg.ramses.disable_discovery
-                lib_cfg["config"]["enable_eavesdrop"] = not self.cfg.ramses.disable_discovery or self.cfg.ramses.enable_eavesdrop
+            loaded_schema = self.persistence.load_schema()
+            if loaded_schema:
+                # The schema file stores a flat dict: TCS id keys + metadata keys.
+                # Strip non-schema metadata before passing to GatewayConfig.
+                _meta_keys = {"config", "known_list", "block_list"}
+                schema = {k: v for k, v in loaded_schema.items() if k not in _meta_keys}
+                known_list = loaded_schema.get("known_list", {})
+                block_list = loaded_schema.get("block_list", {})
+                disable_discovery = self.cfg.ramses.disable_discovery
+                enable_eavesdrop = not self.cfg.ramses.disable_discovery or self.cfg.ramses.enable_eavesdrop
             else:
                 msg = "No valid schema available. Falling back to discovery"
                 self.log.info(msg)
                 print_formatted_row(msg)
-                lib_cfg["config"]["disable_discovery"] = False
-                lib_cfg["config"]["enforce_known_list"] = False
-                lib_cfg["config"]["enable_eavesdrop"] = True
+                disable_discovery = False
+                enforce_known_list = False
+                enable_eavesdrop = True
         else:
             print_formatted_row("Discovery mode enabled")
 
-        # Packet log settings
-        lib_cfg["packet_log"] = {}
-        if self.cfg.files.packet_log_file:
-            lib_cfg["packet_log"]["file_name"] = str(self.cfg.files.packet_log_file)
-        if self.cfg.files.rotate_bytes:
-            lib_cfg["packet_log"]["rotate_bytes"] = self.cfg.files.rotate_bytes
-        if self.cfg.files.rotate_count:
-            lib_cfg["packet_log"]["rotate_backups"] = self.cfg.files.rotate_count
+        # TODO: packet_log format changed in ramses_rf 0.57.0 — field names changed
+        # (file_name → packet_log_path, rotate_backups count → packet_log_retention_days
+        # in days). Restore packet logging once the new format is mapped.
+        engine = EngineConfig(
+            port_name=self.cfg.serial.port,
+            disable_sending=self.cfg.ramses.disable_sending,
+            enforce_known_list=enforce_known_list,
+        )
 
-        return self.cfg.serial.port, lib_cfg
+        return GatewayConfig(
+            disable_discovery=disable_discovery,
+            enable_eavesdrop=enable_eavesdrop,
+            max_zones=12,
+            schema=schema,
+            known_list=known_list,
+            block_list=block_list,
+            engine=engine,
+        )
 
     # MQTT inbound
     async def _on_mqtt_message(self, payload: dict, is_retained: bool = False) -> None:
@@ -224,13 +226,13 @@ class EvoGatewayApp:
         except Exception:
             self.log.exception("Failed to publish command status to MQTT")
 
-    def _publish_schema_snapshot(self) -> None:
+    async def _publish_schema_snapshot(self) -> None:
         if not (self.mqtt and self.ramses and self.ramses.gwy):
             return
 
         try:
             gwy = self.ramses.gwy
-            topics = self.mqtt_topics  
+            topics = self.mqtt_topics
             gateway_name = self.cfg.misc.this_gateway_name.lower()
 
             base = f"{topics.system}/_{gateway_name.lower()}"
@@ -241,31 +243,30 @@ class EvoGatewayApp:
             mode = "eavesdrop" if using_discovery or using_eavesdrop else "monitor"
             self.mqtt.publish(f"{base}/_{gateway_name}_mode", mode)
 
-            # Config, schema,  params and status
-            config = vars(gwy.config)
-            full_schema = self.current_schema_snapshot()
-            tcs_schema = gwy.schema if gwy.tcs is None else gwy.tcs.schema
-            params = gwy.params if gwy.tcs is None else gwy.tcs.params
-            status = gwy.status if gwy.tcs is None else gwy.tcs.status
-            known_list  = gwy.known_list
+            # Config, schema, params and status
+            full_schema = await self.current_schema_snapshot()
+            tcs_schema = await gwy.schema() if gwy.tcs is None else await gwy.tcs.schema()
+            params = await gwy.params() if gwy.tcs is None else await gwy.tcs.params()
+            status = await gwy.status() if gwy.tcs is None else await gwy.tcs.status()
+            known_list = gwy.config.known_list
 
-            self.mqtt.publish(f"{base}/config", json.dumps(config, sort_keys=True))
-            self.mqtt.publish(f"{base}/schema_full", json.dumps(full_schema, sort_keys=True))
-            self.mqtt.publish(f"{base}/schema_tcs", json.dumps(tcs_schema, sort_keys=True))
-            self.mqtt.publish(f"{base}/params", json.dumps(params, sort_keys=True))
-            self.mqtt.publish(f"{base}/status", json.dumps(status, sort_keys=True))
-            self.mqtt.publish(f"{base}/known_list", json.dumps(known_list, sort_keys=True))
+            self.mqtt.publish(f"{base}/schema_full", json.dumps(full_schema, default=str, sort_keys=True))
+            self.mqtt.publish(f"{base}/schema_tcs", json.dumps(tcs_schema, default=str, sort_keys=True))
+            self.mqtt.publish(f"{base}/params", json.dumps(params, default=str, sort_keys=True))
+            self.mqtt.publish(f"{base}/status", json.dumps(status, default=str, sort_keys=True))
+            self.mqtt.publish(f"{base}/known_list", json.dumps(known_list, default=str, sort_keys=True))
 
             # Devices (id → alias + zone_id)
             devices = {
-                str(k): {"alias": getattr(v,"alias",""), "zone_id": getattr(v,"zone_id","")} for k, v in gwy.device_by_id.items()
+                str(k): {"alias": getattr(v, "alias", ""), "zone_id": getattr(v, "zone_id", "")}
+                for k, v in gwy.device_registry.device_by_id.items()
             }
             self.mqtt.publish(f"{base}/devices", json.dumps(devices, sort_keys=True))
             self.mqtt.publish(f"{base}/devices_count", len(devices))
 
-            # Zones            
-            zones = {               
-                str(k): v.name if v.name else str(v)
+            # Zones (use _name attr — .name() is async in 0.57.0)
+            zones = {
+                str(k): (getattr(v, "_name", None) or str(v))
                 for k, v in gwy.tcs.zone_by_idx.items()
             } if gwy.tcs else {}
             self.mqtt.publish(f"{base}/zones", json.dumps(zones, sort_keys=True))
@@ -280,41 +281,43 @@ class EvoGatewayApp:
                 local_now(self.cfg.misc.use_local_time).strftime("%Y-%m-%dT%H:%M:%S"),
             )
         except Exception as ex:
-            print_formatted_row(f"Exception: {ex}")
-        
-    # Print schema/devices to console 
-    def _print_gateway_schema(self) -> None:
+            self.log.warning(f"Schema publish error: {ex}")
+
+    # Print schema/devices to console
+    async def _print_gateway_schema(self) -> None:
         if not (self.ramses and self.ramses.gwy):
             return
         gwy = self.ramses.gwy
-        schema = self.current_schema_snapshot()
+        schema = await self.current_schema_snapshot()
         print(f"Schema: {json.dumps(schema, indent=4)}\r\n")
         try:
-            print(f"Params: {json.dumps(gwy.params)}\r\n")
+            print(f"Params: {json.dumps(await gwy.params())}\r\n")
         except Exception:
             pass
         try:
-            print(f"Status: {json.dumps(gwy.status)}")
+            print(f"Status: {json.dumps(await gwy.status())}")
         except Exception:
             pass
         try:
-            orphans = [d for d in sorted(gwy.schema.get('orphans_heat', []))]
+            full_schema = await gwy.schema()
+            orphans = [d for d in sorted(full_schema.get('orphans_heat', []))]
             print(f"Schema[orphans_heat]: {json.dumps({'orphans_heat': orphans}, indent=4)}\r\n")
         except Exception:
             pass
 
         # Devices
         devices = {
-            str(k): {"alias": getattr(v,"alias",""), "zone_id": getattr(v,"zone_id","")} for k, v in gwy.device_by_id.items()
+            str(k): {"alias": getattr(v, "alias", ""), "zone_id": getattr(v, "zone_id", "")}
+            for k, v in gwy.device_registry.device_by_id.items()
         }
         print(f"Devices: {json.dumps(devices, indent=4)}")
 
 
-    def current_schema_snapshot(self) -> dict:
+    async def current_schema_snapshot(self) -> dict:
         gwy = self.ramses.gwy
-        config = {"config": vars(gwy.config)}
-        known_list = {"known_list": getattr(gwy, "known_list", {})}
-        schema = {**config, **(gwy.schema or {}), **known_list}
+        known_list = {"known_list": gwy.config.known_list}
+        live_schema = await gwy.schema() or {}
+        schema = {**live_schema, **known_list}
         return schema
 
     async def run(self) -> None:
@@ -352,10 +355,9 @@ class EvoGatewayApp:
         )
 
         # Ramses
-        serial_port, self._loaded_schema = self._build_ramses_config()
+        gwy_config = self._build_ramses_config()
         self.ramses = RamsesService(
-            serial_port=serial_port,
-            lib_kwargs=self._loaded_schema,
+            gwy_config=gwy_config,
             logger=self.log,
             registry=self.registry,  
             on_message=self.router.handle_message,
@@ -599,12 +601,12 @@ class EvoGatewayApp:
                 using_discovery = not self.ramses.gwy.config.disable_discovery
                 using_eavesdrop = self.ramses.gwy.config.enable_eavesdrop
 
-                self._print_gateway_schema()
-                self._publish_schema_snapshot()
+                await self._print_gateway_schema()
+                await self._publish_schema_snapshot()
 
-                if self.cfg.files.save_schema_on_shutdown or using_eavesdrop or using_discovery: 
+                if self.cfg.files.save_schema_on_shutdown or using_eavesdrop or using_discovery:
                     # Save schema file
-                    self._handle_sys_config("SAVE_SCHEMA")
+                    await self._handle_sys_config("SAVE_SCHEMA")
                     print("Schema has been saved to file")
 
         except Exception:
@@ -625,12 +627,12 @@ class EvoGatewayApp:
             pass
 
     # Sys-config persistence hook (invoked from RamsesService on SAVE_SCHEMA/POST_SCHEMA)
-    def _handle_sys_config(self, cmd: str) -> None:
+    async def _handle_sys_config(self, cmd: str) -> None:
         try:
             if cmd in ("POST_SCHEMA", "SAVE_SCHEMA"):
-                self._publish_schema_snapshot()
+                await self._publish_schema_snapshot()
             if cmd == "SAVE_SCHEMA":
-                schema = self.current_schema_snapshot()
+                schema = await self.current_schema_snapshot()
                 self.persistence.save_schema(schema)
             if cmd == "REMOVE_HA_DISCOVERY":
                 if self.mqtt:

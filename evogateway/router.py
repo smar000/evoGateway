@@ -14,7 +14,10 @@ import logging
 from typing import Any, Dict, Optional, Callable, Awaitable
 from colorama import init as colorama_init, Fore, Back, Style
 
-from ramses_tx.message import CODE_NAMES
+from ramses_rf.protocol_schema import CODES_SCHEMA as _CODES_SCHEMA
+from ramses_rf.messages.base import Message as _RamsesMessage
+CODE_NAMES = {code: entry["name"] for code, entry in _CODES_SCHEMA.items() if "name" in entry}
+_RamsesMessage._GET_CODE_NAME_CB = lambda code: CODE_NAMES.get(code, f"unknown_{code}")
 
 from .utils import to_snake_case, clean_display_text, print_formatted_row, local_now
 from .utils import apply_address_aliases, zone_group
@@ -100,8 +103,8 @@ class MessageRouter:
         #  Device type 
         device_type = self.registry.type_of(src_id)
 
-        #  RSSI 
-        rssi = getattr(getattr(msg, "_pkt", None), "_rssi", None)
+        #  RSSI
+        rssi = getattr(msg, "rssi", None) or getattr(getattr(msg, "_pkt", None), "_rssi", None)
 
         #  Timestamp 
         timestamp = self.format_timestamp()
@@ -285,7 +288,7 @@ class MessageRouter:
 
         zones: dict[str, list] = {}
 
-        for dev in ramses.gwy.device_by_id.values():
+        for dev in ramses.gwy.device_registry.device_by_id.values():
             zone_devs = zone_group(dev)
             zones.setdefault(zone_devs, []).append(dev)
 

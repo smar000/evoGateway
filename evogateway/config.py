@@ -17,7 +17,7 @@ from colorama import Fore, Back, Style # For DEFAULT_COLOURS only
 import logging
 
 # Constants & defaults
-GATEWAY_VERSION = "4.5.2-0.52.1"
+GATEWAY_VERSION = "4.5.2"
 
 CONFIG_DIR_NAME: Final[Path] = Path("config")
 LOGS_DIR_NAME: Final[Path] = Path("logs")

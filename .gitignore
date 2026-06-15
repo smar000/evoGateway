@@ -37,6 +37,10 @@ old_*
 # Optional: ignore ramses_rf (local dev copy)
 ramses_rf/
 
+# Virtual environment
+venv/
+.venv/
+
 # OS junk
 .DS_Store
 .Trashes

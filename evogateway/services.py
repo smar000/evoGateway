@@ -21,11 +21,16 @@ from typing import Any, Dict, Optional, Callable, Awaitable
 import paho.mqtt.client as mqtt
 
 from ramses_rf import Gateway, GracefulExit
+from ramses_rf.config import GatewayConfig
+from ramses_rf.messages.base import Message as RamsesMessage
 from ramses_rf.version import VERSION as RAMSES_RF_VERSION
 from ramses_tx import Command, Priority
 from ramses_tx.address import HGI_DEVICE_ID, NON_DEVICE_ID, DEV_TYPE_MAP
+from ramses_tx.dtos import PacketDTO
 from ramses_tx.exceptions import RamsesException
-from ramses_tx.message import CODE_NAMES
+from ramses_rf.protocol_schema import CODES_SCHEMA as _CODES_SCHEMA
+CODE_NAMES = {code: entry["name"] for code, entry in _CODES_SCHEMA.items() if "name" in entry}
+RamsesMessage._GET_CODE_NAME_CB = lambda code: CODE_NAMES.get(code, f"unknown_{code}")
 from ramses_rf.exceptions import ExpiredCallbackError 
 
 from .registry import DeviceRegistry
@@ -180,18 +185,16 @@ class RamsesService:
     def __init__(
         self,
         *,
-        serial_port: str,
-        lib_kwargs: Dict[str, Any],
+        gwy_config: GatewayConfig,
         logger: logging.Logger,
         registry: DeviceRegistry,
         on_message: Callable[[Any], None],
-        publish_schema: Callable[[], None],
-        on_sys_config: Callable[[str], None] | None = None,        
+        publish_schema: Callable[[], Awaitable[None]],
+        on_sys_config: Callable[[str], Awaitable[None]] | None = None,
         colors: Dict[str, str] | None = None,
         min_row_length: int = DEFAULT_MIN_ROW_LENGTH,
     ) -> None:
-        self.serial_port = serial_port
-        self.lib_kwargs = lib_kwargs
+        self.gwy_config = gwy_config
         self.log = logger
         self.registry = registry
         self._on_message = on_message
@@ -213,15 +216,15 @@ class RamsesService:
         self.last_rf_message_ts: Optional[_dt.datetime] = None
 
     async def start(self) -> None:
-        self.log.debug("LIB KWARGS SCHEMA:", json.dumps(self.lib_kwargs.get("schema"), indent=2))
+        self.log.debug(f"Gateway schema keys: {list(self.gwy_config.schema.keys()) if self.gwy_config.schema else 'none'}")
 
-        self.gwy = Gateway(self.serial_port, **self.lib_kwargs)
+        self.gwy = Gateway(config=self.gwy_config)
         self.gwy.add_msg_handler(self._handle_gwy_message)
         self._refresh_devices()
         self._refresh_zones()        
         await self.gwy.start()
         
-        self._publish_schema()
+        await self._publish_schema()
 
         # TODO! Check why zone names not coming through after gateway start. Temp fix for now
         self._update_zone_names_from_schema()
@@ -233,7 +236,7 @@ class RamsesService:
         self.sync_registry_from_gwy()
 
         # Set counters
-        self._last_dev_count = len(self.gwy.device_by_id)
+        self._last_dev_count = len(self.gwy.device_registry.device_by_id)
         self._last_zone_count = len(self.gwy.tcs.zone_by_idx) if self.gwy.tcs else 0
 
         # Arm the RF watchdog from gateway-ready time, not first message
@@ -256,14 +259,14 @@ class RamsesService:
         """
         await self.stop()
         await asyncio.sleep(2)
-        self.gwy = Gateway(self.serial_port, **self.lib_kwargs)
+        self.gwy = Gateway(config=self.gwy_config)
         self.gwy.add_msg_handler(self._handle_gwy_message)
         await self.gwy.start()
         # Intentionally do NOT reset last_rf_message_ts here — the watchdog
         # measures silence from the last real RF message, not from the restart time.
 
     def _check_discovery_updates(self):
-        dev_count = len(self.gwy.device_by_id)
+        dev_count = len(self.gwy.device_registry.device_by_id)
         if dev_count != self._last_dev_count:
             self.registry.update_from_gateway(self.gwy)
             self._last_dev_count = dev_count
@@ -273,7 +276,7 @@ class RamsesService:
         try:
             if not self.gwy:
                 return ""
-            entry = self.gwy.known_list.get(device_id, {})
+            entry = (self.gwy_config.known_list or {}).get(device_id, {})
             alias = entry.get("alias", "")
             return alias or ""
         except Exception:
@@ -309,26 +312,14 @@ class RamsesService:
         return dev_type
 
     def check_schema_changed(self) -> bool:
-        """Detect whether ramses_rf has disocvered new devices or zones."""
-        schema = self.gwy.schema  
-        
-        dev_count = len(schema.devices)
-        zone_count = len(schema.zones)
-
-        changed = False
-        
-        if dev_count != self._last_dev_count:
-            changed = True
-            self._last_dev_count = dev_count
-
-        if zone_count != self._last_zone_count:
-            changed = True
-            self._last_zone_count = zone_count
-
+        """Detect whether ramses_rf has discovered new devices or zones."""
+        dev_count = len(self.gwy.device_registry.device_by_id)
+        tcs = getattr(self.gwy, "tcs", None)
+        zone_count = len(tcs.zone_by_idx) if tcs else 0
+        changed = dev_count != self._last_dev_count or zone_count != self._last_zone_count
         if changed:
-            # Rebuild registry objects for new devices/zones
-            self.registry.rebuild_from_schema(schema)
-
+            self._last_dev_count = dev_count
+            self._last_zone_count = zone_count
         return changed
 
     def _update_zone_names_from_schema(self):
@@ -340,8 +331,8 @@ class RamsesService:
             self.log.warn("GWY does not have a valid schema from which to update zone names")
             return
         
-        for zone_id in self.lib_kwargs[self.gwy.tcs.id]["zones"]:
-            zone = self.lib_kwargs[self.gwy.tcs.id]["zones"][zone_id]
+        tcs_schema = self.gwy_config.schema.get(self.gwy.tcs.id, {})
+        for zone_id, zone in tcs_schema.get("zones", {}).items():
             self.gwy.tcs.zones[int(zone_id,16)]._name = zone.get("_name", f"Zone {zone_id}")
 
     def _load_ufh_mapping_from_schema(self):
@@ -353,7 +344,7 @@ class RamsesService:
         # ufh_schema = self.lib_kwargs[self.gwy.tcs.id]["underfloor_heating"]
         # self.gwy.tcs.schema["underfloor_heating"] = ufh_schema
         try:
-            ufh_schema = self.lib_kwargs[self.gwy.tcs.id]
+            ufh_schema = self.gwy_config.schema.get(self.gwy.tcs.id, {}) if self.gwy.tcs else {}
             if ufh_schema:
                 self.registry.set_ufh_map_from_schema(ufh_schema)
         except Exception:
@@ -369,15 +360,15 @@ class RamsesService:
         if getattr(gwy, "hgi", None) and getattr(gwy.hgi, "id", None):
             self.registry.set_hgi(gwy.hgi.id)
 
-        # Schema alias import (known_devices or known_list) 
-        known = getattr(gwy, "known_devices", None) or getattr(gwy, "known_list", {})
+        # Schema alias import from known_list
+        known = self.gwy_config.known_list or {}
         for dev_id, meta in known.items():
             alias = meta.get("alias", None)
             if alias:
                 reg.update_alias(dev_id, alias)
 
         # Live discovery: device types and zones 
-        for dev_id, dev in gwy.device_by_id.items():
+        for dev_id, dev in gwy.device_registry.device_by_id.items():
 
             # Device Type (e.g. "04", "10")
             dev_type = getattr(dev, "type", None)
@@ -412,7 +403,7 @@ class RamsesService:
                     reg.ufh_map[(ufh_dev_id, str(circuit_id))] = zone_idx
 
         # Update internal counters for discovery auto-sync 
-        self._last_dev_count = len(gwy.device_by_id)
+        self._last_dev_count = len(gwy.device_registry.device_by_id)
 
         tcs = getattr(gwy, "tcs", None)
         zone_by_idx = getattr(tcs, "zone_by_idx", {}) if tcs else {}
@@ -444,9 +435,9 @@ class RamsesService:
                 if cmd in ("POST_SCHEMA", "SAVE_SCHEMA", "REMOVE_HA_DISCOVERY"):
                     self._refresh_zones()
                     self._refresh_devices()
-                    self._publish_schema()
+                    await self._publish_schema()
                     if self._handle_sys_config:
-                        self._handle_sys_config(cmd)
+                        await self._handle_sys_config(cmd)
                     publish_status(cmd_name, "Successful")
                 else:
                     self.log.warning("Unknown sys_config command: %s", cmd)
@@ -559,22 +550,27 @@ class RamsesService:
 
         raise CommandSendError(msg)
 
-    def _handle_gwy_message(self, msg) -> None:
+    async def _handle_gwy_message(self, dto) -> None:
         self.last_rf_message_ts = _dt.datetime.now().astimezone()
+        # 0.57.0: add_msg_handler delivers PacketDTO; promote to Message for routing
+        try:
+            msg = RamsesMessage(dto) if isinstance(dto, PacketDTO) else dto
+        except Exception:
+            msg = dto
         try:
             msg.code_name = CODE_NAMES.get(msg.code, getattr(msg, "code_name", str(msg.code)))
         except Exception:
             pass
         # Registry auto-sync when new devices/zones discovered by ramses
         try:
-            dev_count = len(self.gwy.device_by_id)
+            dev_count = len(self.gwy.device_registry.device_by_id)
             tcs = getattr(self.gwy, "tcs", None)
             zone_by_idx = getattr(tcs, "zone_by_idx", {}) if tcs else {}
             zone_count = len(zone_by_idx)
 
             if dev_count != self._last_dev_count or zone_count != self._last_zone_count:
                 self.sync_registry_from_gwy()
-                self._publish_schema()
+                asyncio.get_event_loop().create_task(self._publish_schema())
 
             self._on_message(msg)
         except Exception:
@@ -583,17 +579,15 @@ class RamsesService:
     def _refresh_devices(self) -> None:
         if not self.gwy:
             return
-        schema = self.gwy.tcs.schema if self.gwy.tcs else self.gwy.schema
+        tcs_id = self.gwy.tcs.id if self.gwy.tcs else None
+        schema = self.gwy_config.schema.get(tcs_id, {}) if tcs_id else {}
         try:
-            ctl_id = self.gwy.tcs.id if self.gwy.tcs else (self.gwy.schema.get("main_tcs") if self.gwy.schema else None)
-            if ctl_id and ctl_id not in self.devices:
-                self.devices[ctl_id] = DeviceRecord(alias="Controller")
+            if tcs_id and tcs_id not in self.devices:
+                self.devices[tcs_id] = DeviceRecord(alias="Controller")
         except Exception:
             pass
-
         try:
-            zones = schema.get("zones", {})
-            for zone_id, zone_items in zones.items():
+            for zone_id, zone_items in schema.get("zones", {}).items():
                 sensor_id = zone_items.get("sensor")
                 if sensor_id:
                     self.devices.setdefault(sensor_id, DeviceRecord(alias=f"{self._device_type_code(sensor_id)}", zone_id=zone_id))
@@ -606,14 +600,18 @@ class RamsesService:
     def _refresh_zones(self) -> None:
         if not self.gwy:
             return
-        schema = self.gwy.tcs.schema if self.gwy.tcs else self.gwy.schema
-        params = self.gwy.tcs.params if self.gwy.tcs else self.gwy.params
+        tcs_id = self.gwy.tcs.id if self.gwy.tcs else None
+        schema = self.gwy_config.schema.get(tcs_id, {}) if tcs_id else {}
         try:
-            zones = schema.get("zones", {})
-            for zid in zones:
-                name = (params.get("zones", {}).get(zid, {}).get("name") if isinstance(params, dict) else None)
-                if name:
-                    self.zones[zid] = name
+            if self.gwy.tcs:
+                for idx, zone in self.gwy.tcs.zone_by_idx.items():
+                    zid = f"{idx:02X}"
+                    name = getattr(zone, '_name', None)
+                    if name:
+                        self.zones[zid] = name
+            else:
+                for zid in schema.get("zones", {}):
+                    self.zones.setdefault(zid, zid)
         except Exception:
             pass
         try:
@@ -688,7 +686,7 @@ class PersistenceService:
                     else:
                         src.rename(dst)
             path.rename(path.with_suffix(path.suffix + ".1"))
-        path.write_text(json.dumps(data, indent=4, sort_keys=True))
+        path.write_text(json.dumps(data, indent=4, sort_keys=True, default=str))
 
     def load_json(self, path: Path) -> dict:
         try:
