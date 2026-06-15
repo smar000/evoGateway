@@ -46,6 +46,7 @@ class EvoGatewayApp:
         self.schedule: ScheduleHandler | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._restart_process: bool = False
+        self._shutdown_reason: str = ""
 
         self.registry = DeviceRegistry()
 
@@ -371,12 +372,14 @@ class EvoGatewayApp:
             logger=self.log
         )
 
-        # Banner
-        print_formatted_row(
-            text=f"# evogateway {GATEWAY_VERSION} (ramses_rf {RAMSES_RF_VERSION})",
-            style_prefix="",
-            min_row_length=self.cfg.misc.min_row_length,
-        )
+        # Startup separator and banner — visible in both console and log file
+        _sep = "=" * 80
+        _banner = f"evoGateway {GATEWAY_VERSION} (ramses_rf {RAMSES_RF_VERSION}) starting"
+        print("")
+        print_formatted_row(text=_sep, style_prefix="", min_row_length=self.cfg.misc.min_row_length)
+        print_formatted_row(text=f"# {_banner}", style_prefix="", min_row_length=self.cfg.misc.min_row_length)
+        self.log.info(_sep)
+        self.log.info(_banner)
 
         # Start RF gateway
         await self.ramses.start()
@@ -420,10 +423,21 @@ class EvoGatewayApp:
         try:
             await self._heartbeat_task
 
-        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
-            print("Shutting down…")
+        except KeyboardInterrupt:
+            self._shutdown_reason = self._shutdown_reason or "keyboard interrupt"
+        except (SystemExit, asyncio.CancelledError):
+            pass  # reason already logged/set by the triggering code path
 
         finally:
+            _sep = "=" * 80
+            _stop_label = "restarting" if self._restart_process else "stopping"
+            _stop_reason = f" — {self._shutdown_reason}" if self._shutdown_reason else ""
+            _stop_msg = f"evoGateway {_stop_label}{_stop_reason}"
+            print("")
+            print_formatted_row(text=_sep, style_prefix="", min_row_length=self.cfg.misc.min_row_length)
+            print_formatted_row(text=f"# {_stop_msg}", style_prefix="", min_row_length=self.cfg.misc.min_row_length)
+            self.log.info(_sep)
+            self.log.info(_stop_msg)
             await self.shutdown()
             if self._restart_process:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
@@ -453,6 +467,7 @@ class EvoGatewayApp:
             if cmd == "RESTART_PROCESS":
                 self._restart_process = True
             self._publish_command_status(cmd, "Successful")
+            self._shutdown_reason = f"MQTT command: {cmd}"
             self.log.warning(
                 f"{'Full process' if cmd == 'RESTART_PROCESS' else 'Gateway service'} restart requested via MQTT"
             )
@@ -529,6 +544,7 @@ class EvoGatewayApp:
                     if self.mqtt:
                         self.mqtt.publish_status("Restarting")
                     self._restart_process = True
+                    self._shutdown_reason = f"RF watchdog stage 3 — {msg}"
                     raise SystemExit(1)
 
                 # Stage 4: give up and let the process manager restart us
@@ -540,6 +556,7 @@ class EvoGatewayApp:
                     print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("ERROR", ""), min_row_length=self.cfg.misc.min_row_length)
                     if self.mqtt:
                         self.mqtt.publish_status("Offline")
+                    self._shutdown_reason = f"RF watchdog stage 4 — {msg}"
                     raise SystemExit(1)
 
                 continue  # still within post-restart wait window
