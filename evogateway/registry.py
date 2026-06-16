@@ -58,8 +58,8 @@ class DeviceRegistry:
         # Fallback: detect friendly device type
         dev_type = None
 
-        # Fallback to device type
-        type_id = self.type_of_id[dev_id] if dev_id in self.type_of_id else None
+        # Fallback to device type; if not yet registered use the ID prefix
+        type_id = self.type_of_id.get(dev_id) or (dev_id.split(":")[0] if ":" in dev_id else None)
 
         if type_id == "18":
             # Ramses gives THM for this type id; Ours are normally HGI devices...

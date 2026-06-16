@@ -392,12 +392,12 @@ class RamsesService:
             # Device Type (e.g. "04", "10")
             dev_type = getattr(dev, "type", None)
             if dev_type:
-                if dev_type in reg._merge_types and dev_id not in known_ids:
-                    continue  # phantom singleton — skip
                 prefix = dev_id.split(":")[0] if ":" in dev_id else None
-                if prefix and prefix in reg._merge_types and dev_id in known_ids:
-                    dev_type = prefix  # ramses_rf may return a type name (e.g. "THM") for
-                    # type-18 devices; use the ID prefix so known_list classification wins
+                if prefix and prefix in reg._merge_types:
+                    if dev_id not in known_ids:
+                        continue  # phantom singleton — skip
+                    dev_type = prefix  # known device: normalise to prefix; ramses_rf may
+                    # return a type name (e.g. "THM") rather than the prefix for type-18
                 reg.update_device_type(dev_id, dev_type)
 
             # Zone Index
