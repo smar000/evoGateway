@@ -770,23 +770,21 @@ Look for the method `topic_base`.
 
 ## Known Issues / Library Compatibility Notes
 
-### ramses_rf 0.57.0 — W command echo causes AssertionError in internal handler
+### ~~ramses_rf 0.57.0 — W command echo causes AssertionError in internal handler~~ *(resolved in 0.57.1)*
 
-**Symptom (without workaround):** Every time a W command is sent (e.g. `set_dhw_mode`, `set_zone_setpoint`), an `"Exception in callback"` traceback appears in the log:
+**Fixed in ramses_rf 0.57.1** (released 2026-06-16). The fix ([PR #695](https://github.com/ramses-rf/ramses_rf/pull/695)) adds `"18"` (HGI Gateway) and `"30"` (RFG100 Gateway) to the permitted device-type tuple in the `Zone._handle_msg` assertion in `systems/zones.py`. The custom asyncio exception handler workaround that was in `app.py → EvoGatewayApp.run()` has been removed as of evoGateway v4.6.0.
 
+### Dual-HGI / secondary gateway on the same RF network
+
+If a second evofw3 stick is present on the same RF network (e.g. a production gateway running alongside a dev gateway), add it to `known_list` in `ramses_rf_schema.json` with `"class": "HGI"`:
+
+```json
+"18:136712": { "alias": "Prod Gateway", "class": "HGI" }
 ```
-Exception in callback Controller._handle_msg(...)
-AssertionError: msg inappropriately routed to 01:xxxxxx_HW (DHW)
-```
 
-**Root cause:** When we transmit a W command, evofw3 echoes the packet back to the serial port. ramses_rf's internal `_msg_handler` receives that echo and routes it through `Controller._handle_msg → TCS._handle_msg → DhwZone._handle_msg`. The DHW zone handler asserts that any incoming message for it must either come from the controller (`msg.src == self.ctl`) or carry a `domain_id`/`zone_idx` in the parsed payload. The echo has `src = 18:xxx` (our HGI) — not the controller — and the `1F41` parser in 0.57.0 does not include `domain_id` or `zone_idx` in its output, so all three assertion conditions fail.
+This does two things: (1) ramses_rf correctly classifies the device as an HGI rather than THM/THI, and (2) the device ID enters ramses_rf's `_include` list, suppressing the once-per-day "Foreign gateway" warning in the log. The `18:000730` placeholder entry should remain — it is the broadcast source address used when sending commands before the HGI's real address is known.
 
-**Impact:** None on functionality. The W command is transmitted correctly and the controller processes it. The crash is only in the library's internal echo bookkeeping; our `_handle_gwy_message` callback runs independently and is unaffected.
+### Type-18 device display showing "THM" instead of "HGI"
 
-**Workaround (applied in `app.py → EvoGatewayApp.run()`):** A narrow custom asyncio exception handler intercepts only `AssertionError` exceptions whose message contains `"inappropriately routed"` (the exact text in `ramses_rf/systems/zones.py`). These are logged at DEBUG level instead of printing a full traceback. All other exceptions pass through to the default handler unchanged.
-
-**Upstream status:** Bug fixed in [ramses_rf PR #695](https://github.com/ramses-rf/ramses_rf/pull/695) (merged). The fix adds `"18"` (HGI Gateway) and `"30"` (RFG100 Gateway) to the permitted device-type tuple in the `Zone._handle_msg` assertion in `systems/zones.py`. As of 2026-06-15, the fix is merged into the main branch but **not yet released on PyPI** — `0.57.0` is still the latest published version.
-
-**When upgrading ramses_rf:** If the installed version is newer than `0.57.0`, remove the custom exception handler block from `app.py → EvoGatewayApp.run()` and verify W commands no longer produce assertion noise before deploying.
-
+ramses_rf's live device discovery can return `dev.type = "THM"` for type-18 devices it hasn't positively identified as HGI. In `sync_registry_from_gwy`, the live-discovery loop previously overwrote the prefix-based type (`"18"`) stored by the known-list loop with this name. Fixed in `services.py`: for known devices whose ID prefix is a singleton-merge type, the prefix is always used in preference to the ramses_rf type name.
 

@@ -7,5 +7,5 @@ paho-mqtt==2.1.0
 pyserial==3.5
 pyserial-asyncio==0.6
 pyserial-asyncio-fast==0.16
-ramses-rf==0.57.0
+ramses-rf==0.57.1
 voluptuous==0.15.2

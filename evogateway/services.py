@@ -225,9 +225,11 @@ class RamsesService:
         self.gwy = Gateway(config=self.gwy_config)
         self.gwy.add_msg_handler(self._handle_gwy_message)
         self._refresh_devices()
-        self._refresh_zones()        
+        self._refresh_zones()
         await self.gwy.start()
-        
+
+        # Re-run after gwy.start() so gwy.tcs is available for zone names and UFH circuits
+        self._refresh_zones()
         await self._publish_schema()
 
         # TODO! Check why zone names not coming through after gateway start. Temp fix for now
@@ -392,6 +394,10 @@ class RamsesService:
             if dev_type:
                 if dev_type in reg._merge_types and dev_id not in known_ids:
                     continue  # phantom singleton — skip
+                prefix = dev_id.split(":")[0] if ":" in dev_id else None
+                if prefix and prefix in reg._merge_types and dev_id in known_ids:
+                    dev_type = prefix  # ramses_rf may return a type name (e.g. "THM") for
+                    # type-18 devices; use the ID prefix so known_list classification wins
                 reg.update_device_type(dev_id, dev_type)
 
             # Zone Index
@@ -543,7 +549,16 @@ class RamsesService:
             publish_status(cmd_name, "Failed", error=str(ex))
 
     async def _send_cmd(self, gw_cmd: Command) -> None:
-        """Sends commands and validates response"""
+        """Send a command and confirm RF transmission.
+
+        ramses_rf 0.57.x forces wait_for_reply=False for all command codes
+        except 0006/0404/0418/1FC9 (schedule/binding). For all other codes
+        (including 313F datetime, 1F41 DHW mode, etc.) the library resolves
+        the send future on the evofw3 echo — not on the controller's reply.
+        Raising here therefore means: the RF packet was NOT transmitted.
+        The controller's response (if any) arrives independently via
+        _handle_gwy_message as a normal inbound message.
+        """
         if not self.gwy:
             raise CommandSendError("Gateway is not initialized")
 
@@ -555,24 +570,6 @@ class RamsesService:
             )
         except Exception as ex:
             raise CommandSendError(f"RF transmission failed: {ex}") from ex
-
-        # Validate response using rx_header property of sent command (contains any reply received)
-        try:
-            rx = getattr(gw_cmd, "rx_header", None)
-            if rx:
-                reply_code, reply_verb, _rest = rx.split("|", maxsplit=2)
-                if reply_code == gw_cmd.code and reply_verb.strip() in ("RP", "I"):
-                    return  # SUCCESS
-        except Exception:
-            pass  # fall through
-
-        # If here, reply header invalid or missing
-        rx = getattr(gw_cmd, "rx_header", None)
-        msg = f"Invalid or missing reply header for '{CODE_NAMES.get(gw_cmd.code, 'Unknown')}'"
-        if rx:
-            msg += f" (rx_header='{rx}')"
-
-        raise CommandSendError(msg)
 
     async def _handle_gwy_message(self, dto) -> None:
         self.last_rf_message_ts = _dt.datetime.now().astimezone()
@@ -648,11 +645,16 @@ class RamsesService:
         except Exception:
             pass
         try:
-            if "ufh_system" in schema:
-                for _ufc_id, u in schema["ufh_system"].items():
-                    for c, data in (u.get("circuits", {}) or {}).items():
-                        if c not in self.ufh_circuits:
-                            self.ufh_circuits[c] = data
+            for _ufc_id, u in schema.get("underfloor_heating", {}).items():
+                for c, data in (u.get("circuits", {}) or {}).items():
+                    if c not in self.ufh_circuits:
+                        circuit_data = dict(data or {})
+                        zone_idx = circuit_data.get("zone_idx", "")
+                        if zone_idx:
+                            zone_name = self.zones.get(zone_idx)
+                            if zone_name:
+                                circuit_data["zone_name"] = zone_name
+                        self.ufh_circuits[c] = circuit_data
         except Exception:
             pass
 

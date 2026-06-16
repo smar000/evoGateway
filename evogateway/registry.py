@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Optional, Any
-from ramses_tx.address import DEV_TYPE_MAP
+from ramses_tx.address import DEV_TYPE_MAP, ALL_DEV_ADDR
 
 class DeviceRegistry:
     """
@@ -45,6 +45,10 @@ class DeviceRegistry:
         if self.hgi_id and dev_id == self.hgi_id:
             if self.this_gateway_name:
                 return self.this_gateway_name
+
+        # Well-known sentinel addresses
+        if dev_id == ALL_DEV_ADDR.id:
+            return f"Broadcast ({dev_id})"
 
         # Otherwise alias from schema/user
         alias = self.alias_of_id.get(dev_id)
