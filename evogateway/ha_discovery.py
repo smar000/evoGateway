@@ -12,6 +12,8 @@ Topic pattern: {ha_prefix}/device/{device_id}/config
 
 from __future__ import annotations
 import asyncio
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .utils import to_snake_case
@@ -20,6 +22,26 @@ if TYPE_CHECKING:
     from .registry import DeviceRegistry
     from .config import MqttConfig
     from .services import MQTTService
+
+try:
+    from ramses_rf.protocol.opentherm import OPENTHERM_MESSAGES
+    _OT_MSGS_BY_VAR: dict[str, dict] = {
+        entry["var"]: entry
+        for entry in OPENTHERM_MESSAGES.values()
+        if isinstance(entry, dict) and isinstance(entry.get("var"), str)
+    }
+except Exception:
+    OPENTHERM_MESSAGES = {}
+    _OT_MSGS_BY_VAR = {}
+
+# Maps ramses_rf sensor type string → HA entity metadata for OpenTherm scalar sensors.
+_OT_SENSOR_HA_MAP: dict[str, dict] = {
+    "temperature (°C)":  {"class": "temperature", "unit": "°C",  "state_class": "measurement"},
+    "pressure (bar)":    {"class": "pressure",    "unit": "bar", "state_class": "measurement"},
+    "flow rate (L/min)": {"unit": "L/min",        "state_class": "measurement"},
+    "percentage (%)":    {"unit": "%",             "state_class": "measurement",
+                          "value_template": "{{ (value_json.value * 100) | round(1) }}"},
+}
 
 
 # Maps device type code → list of sensor descriptors.
@@ -53,13 +75,11 @@ DEVICE_SENSORS: dict[str, list[dict]] = {
         {"msg_code": "boiler_setpoint","field": "setpoint",         "name": "Boiler Setpoint",   "class": "temperature", "unit": "°C", "state_class": "measurement"},
         # Domain-specific heat demand (OTB relays FC/UFH demand)
         {"msg_code": "heat_demand/_domain_fc_ufh", "field": "heat_demand", "name": "UFH Heat Demand", "unit": "%", "state_class": "measurement", "value_template": "{{ (value_json.heat_demand * 100) | round(1) }}"},
-        # OpenTherm protocol message sub-topics
-        {"msg_code": "opentherm_msg/boiler_water_temperature",  "field": "value",       "name": "Boiler Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/return_water_temperature", "field": "value",       "name": "Return Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/ch_water_pressure",        "field": "value",       "name": "CH Water Pressure",   "class": "pressure",    "unit": "bar", "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/relative_modulation_level","field": "value",       "name": "Modulation Level",    "unit": "%",            "state_class": "measurement", "value_template": "{{ (value_json.value * 100) | round(1) }}"},
-        {"msg_code": "opentherm_msg/fault_flags",             "field": "description", "name": "Fault Description"},
-        {"msg_code": "opentherm_msg/fault_flags",             "field": "value_lb",    "name": "OEM Fault Code",      "state_class": "measurement"},
+        # fault_flags is a flags-type entry (not a scalar var), so it stays hardcoded here.
+        # All scalar OpenTherm sensors (temperature, pressure, etc.) are discovered lazily
+        # via on_new_ot_sensor() and stored in the ot_sensors_cache.json file.
+        {"msg_code": "opentherm_msg/fault_flags", "field": "description", "name": "Fault Description"},
+        {"msg_code": "opentherm_msg/fault_flags", "field": "value_lb",    "name": "OEM Fault Code",  "state_class": "measurement"},
     ],
     "02": [  # HCC80R UFH controller
         {"msg_code": "heat_demand",    "field": "heat_demand",    "name": "Heat Demand", "unit": "%",            "state_class": "measurement"},
@@ -98,6 +118,7 @@ class HADiscovery:
         dhw_temp_subtopic: str = "",
         dhw_params_subtopic: str = "",
         dhw_mode_subtopic: str = "",
+        ot_cache_file: Path | None = None,
     ) -> None:
         self.registry = registry
         self.topics = mqtt_topics
@@ -111,6 +132,8 @@ class HADiscovery:
         self.dhw_temp_subtopic = dhw_temp_subtopic.strip("/")
         self.dhw_params_subtopic = dhw_params_subtopic.strip("/")
         self.dhw_mode_subtopic = dhw_mode_subtopic.strip("/")
+        self._ot_cache_file = ot_cache_file
+        self._seen_ot_sensors: dict[str, dict] = self._load_ot_cache()
 
     # ------------------------------------------------------------------
     # Public API
@@ -442,6 +465,9 @@ class HADiscovery:
         # Relay-type device types that publish under system/relays/
         _RELAY_TYPES = {"02", "10", "13"}
 
+        if dev_type == "10" and self._seen_ot_sensors:
+            sensors = list(sensors) + list(self._seen_ot_sensors.values())
+
         components: dict = {}
         for sensor in sensors:
             msg_code = sensor["msg_code"]
@@ -502,6 +528,73 @@ class HADiscovery:
             "components": components,
         }
         self._publish_device(phys_dev_id, payload)
+
+    # ------------------------------------------------------------------
+    # OpenTherm lazy discovery
+    # ------------------------------------------------------------------
+
+    def on_new_ot_sensor(self, msg_name: str) -> None:
+        """Called by the router the first time a new OT msg_name is seen.
+
+        Builds an HA sensor descriptor from the ramses_rf schema, persists it,
+        and republishes the full OTB device discovery payload so HA picks it up.
+        """
+        snake = to_snake_case(msg_name)
+        if snake in self._seen_ot_sensors:
+            return
+        descriptor = self._build_ot_descriptor(msg_name)
+        if descriptor is None:
+            return
+        self._seen_ot_sensors[snake] = descriptor
+        self._save_ot_cache()
+        self._republish_otb_devices()
+
+    def _build_ot_descriptor(self, msg_name: str) -> dict | None:
+        """Return a DEVICE_SENSORS-style descriptor for an OT msg_name, or None if unmappable."""
+        entry = _OT_MSGS_BY_VAR.get(msg_name)
+        if not entry:
+            return None
+        ha_meta = _OT_SENSOR_HA_MAP.get(str(entry.get("sensor", "")))
+        if not ha_meta:
+            return None
+        return {
+            "msg_code": f"opentherm_msg/{to_snake_case(msg_name)}",
+            "field": "value",
+            "name": entry.get("en", msg_name),
+            **ha_meta,
+        }
+
+    def _republish_otb_devices(self) -> None:
+        """Republish discovery for all OTB (type 10) devices registered in the system."""
+        for dev_id, dev_type in self.registry.type_of_id.items():
+            if dev_type != "10":
+                continue
+            zone_id = self.registry.zone_of(dev_id)
+            if not zone_id or zone_id in _PSEUDO_ZONES:
+                self._publish_physical_device(dev_id, dev_type, None, None)
+
+    def _load_ot_cache(self) -> dict[str, dict]:
+        """Load previously-discovered OT sensor descriptors from disk."""
+        try:
+            if self._ot_cache_file and self._ot_cache_file.exists():
+                data = json.loads(self._ot_cache_file.read_text())
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+        return {}
+
+    def _save_ot_cache(self) -> None:
+        """Persist the current set of discovered OT sensor descriptors to disk."""
+        if not self._ot_cache_file:
+            return
+        try:
+            self._ot_cache_file.parent.mkdir(parents=True, exist_ok=True)
+            self._ot_cache_file.write_text(
+                json.dumps(self._seen_ot_sensors, indent=2, sort_keys=True)
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Helpers

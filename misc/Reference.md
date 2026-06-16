@@ -319,7 +319,7 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
   * **Purpose:** Defines structured configuration for all aspects of evoGateway.
   * **Components:**
 
-      * **FilesConfig**: event logs, schema file, backup behaviour.
+      * **FilesConfig**: event logs, schema file, `ot_sensors_cache_file` (path to `config/ot_sensors_cache.json`), backup behaviour.
       * **SerialConfig**: port + baud for the Arduino/evofw3 radio.
       * **MqttConfig**: broker address, credentials, topic layout, JSON/KV behaviour.
 
@@ -353,14 +353,30 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 | Class / Function | Description |
 | :--- | :--- |
 | **`class HADiscovery`** | **HA MQTT discovery publisher.** |
-| `publish_all()` | Entry point. Resolves controller slug once, then calls the four device publishers for all zones and physical devices. Excludes DHW BDR91 relay from the generic device loop (handled inside `_publish_dhw_device`). Called at startup and on MQTT reconnect. |
+| `publish_all()` | Entry point. Resolves controller slug once, then calls the four device publishers for all zones and physical devices. Excludes DHW BDR91 relay from the generic device loop (handled inside `_publish_dhw_device`). Called at startup and on MQTT reconnect. OTB device publication automatically includes all previously-cached OT sensors. |
 | `remove_all()` | Removes all HA discovery entries (both legacy `+/+/config` and device-mode `device/+/config`) by publishing empty retained payloads. Triggered by `REMOVE_HA_DISCOVERY` sys_config command. |
 | `_publish_gateway_device` | Gateway device: system mode `select` + DHW/Radiators/UFH relay demand `sensor` components (reads from `system/controllers/{ctl}/relay_demand/_domain_*` topics). |
 | `_publish_zone_device` | Zone device: `climate` (temp + setpoint from controller topics) + heat demand `sensor`. |
 | `_publish_dhw_device` | DHW device: `climate` (heat/auto/off) + relay active `binary_sensor` (from `bdr_dhw_relay/actuator_state`) + DHW sender battery `sensor`. Resolves sensor, controller, and DHW relay slugs from registry; overridable via config. |
-| `_publish_physical_device` | Physical device (TRV, relay, etc.): all sensors from `DEVICE_SENSORS`, named `"{Zone} {Type} ({alias})"`, parented to zone via `via_device`. System relay devices (types 02, 10, 13) use `system/relays/{slug}/` topic path. |
+| `_publish_physical_device` | Physical device (TRV, relay, etc.): all sensors from `DEVICE_SENSORS`, named `"{Zone} {Type} ({alias})"`, parented to zone via `via_device`. System relay devices (types 02, 10, 13) use `system/relays/{slug}/` topic path. For OTB (type 10), also appends all dynamically-discovered OT sensors from `_seen_ot_sensors`. |
+| `on_new_ot_sensor(msg_name)` | Called by `MessageRouter` the first time each OpenTherm `msg_name` is seen on the wire. Looks up the message in `OPENTHERM_MESSAGES`, maps it to HA sensor metadata via `_OT_SENSOR_HA_MAP`, persists it to `ot_sensors_cache.json`, and republishes the full OTB device discovery payload. |
+| `_build_ot_descriptor(msg_name)` | Builds a `DEVICE_SENSORS`-style descriptor dict from the ramses_rf `OPENTHERM_MESSAGES` schema. Returns `None` for messages with no mappable sensor type (e.g. counters, version strings). |
+| `_republish_otb_devices()` | Finds all type-10 devices in the registry and republishes their device-mode discovery payload with the current `_seen_ot_sensors` included. |
 | `_find_dhw_relay_slug` | Helper: finds the BDR91 relay in the DHW zone (zone HW or F9) and returns its snake_case slug. |
-| `DEVICE_SENSORS` | Dict mapping device type codes → sensor descriptors with `msg_code` (MQTT topic sub-path, may include `/` for nested paths like `opentherm_msg/boilerwatertemperature`) and `field` (JSON payload key). Multiple entries with the same `msg_code` but different `field` are allowed (e.g. OTB `actuator_state` produces four separate entities). Edit here to add/rename sensors. |
+| `DEVICE_SENSORS` | Dict mapping device type codes → static sensor descriptors with `msg_code` (MQTT topic sub-path, may include `/` for nested paths) and `field` (JSON payload key). Multiple entries with the same `msg_code` but different `field` are allowed. For OTB (type 10), only non-OpenTherm sensors are listed here (actuator_state, boiler_setpoint, heat_demand, fault_flags). OpenTherm scalar sensors are discovered lazily — do **not** hardcode `opentherm_msg/*` entries here. |
+| `_OT_SENSOR_HA_MAP` | Module-level dict mapping ramses_rf sensor type strings (e.g. `"temperature (°C)"`) to HA entity metadata (`class`, `unit`, `state_class`, optional `value_template`). Edit here to support new sensor types if ramses_rf introduces them. |
+
+### OpenTherm Lazy Discovery
+
+OTB devices (R8810A, type 10) report many OpenTherm protocol messages (`3220` code), each with a `msg_name` field (e.g. `"ReturnWaterTemperature"`). Rather than hardcoding the list of supported messages, evoGateway discovers them lazily:
+
+1. `MessageRouter.handle_message()` detects type-10 messages with a `msg_name` in the payload and calls `HADiscovery.on_new_ot_sensor()` the first time each name is seen (per session).
+2. `on_new_ot_sensor()` looks up the name in `ramses_rf`'s `OPENTHERM_MESSAGES` schema, derives HA metadata via `_OT_SENSOR_HA_MAP`, and publishes an updated OTB device discovery payload.
+3. The descriptor is saved to `config/ot_sensors_cache.json`. On restart, all cached sensors are included in `publish_all()` immediately — no waiting for the first RF message.
+
+**To reset:** Delete `config/ot_sensors_cache.json` and restart. New sensors will be re-discovered as messages arrive.
+
+**Note:** `fault_flags` (OT message ID 5) is a `flags`-type entry in the ramses_rf schema, not a scalar `var`, and has a different payload structure. It remains hardcoded in `DEVICE_SENSORS["10"]`.
 
 ### How It Links
 
@@ -369,6 +385,7 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 * Uses `MQTTService.publish(raw=True)` to publish to full `homeassistant/…` topics without root_topic prefix.
 * Zone climate entities read from controller-reported per-zone topics; zone state (`zones/<zone>/state`) is still written by `MessageRouter._update_and_publish_state` and used by heat demand sensors.
 * `MQTTService._on_connect_extra` hook calls `publish_all()` on reconnect.
+* `MessageRouter._ot_sensor_callback` is wired to `on_new_ot_sensor()` by `app.py` when HA discovery is enabled.
 
 ---
 
@@ -703,7 +720,9 @@ This layered view makes it easier to see where to plug in new behaviour (e.g. an
 * For quick changes to logging/colours, see `config.DEFAULT_COLOURS` and `MiscConfig`.
 * **HA discovery not appearing?** Check `HA_DISCOVERY_ENABLED = True` in cfg; subscribe to `homeassistant/device/#` on the broker to verify retained payloads are present. Each device is one topic: `homeassistant/device/{device_id}/config`.
 * **HA zone temperature not updating?** Zone climate reads from `zones/<zone>/ctl_controller/temperature`. Check `router._update_and_publish_state` for heat demand; subscribe to `<root>/zones/<zone>/state`.
-* **Adding a new device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py` — all sensor definitions are in one place. `msg_code` can contain `/` for nested topic paths (e.g. `opentherm_msg/boilerwatertemperature`). Multiple entries with the same `msg_code` but different `field` names are supported.
+* **OTB sensors not appearing in HA?** OpenTherm sensors are discovered lazily — they appear the first time each message is received from the boiler. Let the system run for a day or two to accumulate the full set your boiler supports. Previously-discovered sensors are cached in `config/ot_sensors_cache.json` and re-published immediately on restart.
+* **Adding a new non-OTB device sensor type?** Edit `DEVICE_SENSORS` in `ha_discovery.py`. `msg_code` can contain `/` for nested topic paths. Multiple entries with the same `msg_code` but different `field` names are supported. Do **not** add `opentherm_msg/*` entries here — those are discovered automatically.
+* **Adding support for a new OpenTherm sensor type?** Check `_OT_SENSOR_HA_MAP` in `ha_discovery.py`. If ramses_rf has added a new sensor category (e.g. a new unit type), add a mapping entry there. Individual message IDs are picked up automatically from `OPENTHERM_MESSAGES`.
 * **Renaming zones?** Send `REMOVE_HA_DISCOVERY` first, rename in schema, then restart to republish clean discovery entries.
 
 ### How do I run this?

@@ -449,11 +449,14 @@ class EvoGatewayApp:
             dhw_temp_subtopic=self.cfg.mqtt.ha_dhw_temp_subtopic,
             dhw_params_subtopic=self.cfg.mqtt.ha_dhw_params_subtopic,
             dhw_mode_subtopic=self.cfg.mqtt.ha_dhw_mode_subtopic,
+            ot_cache_file=self.cfg.files.ot_sensors_cache_file,
         )
         if self.cfg.mqtt.ha_discovery_enabled:
             self._ha_discovery.publish_all()
             # Re-publish on every MQTT reconnect so HA picks up after broker restart
             self.mqtt._on_connect_extra = self._ha_discovery.publish_all
+            # Wire lazy OT sensor discovery: router notifies HA discovery on first sight
+            self.router._ot_sensor_callback = self._ha_discovery.on_new_ot_sensor
         else:
             # Discovery disabled — remove any retained entries left from a previous run
             await self._ha_discovery.remove_all()

@@ -93,6 +93,7 @@ class FilesConfig:
     rotate_count: int = 9
     rotate_bytes: int = 1_000_000
     schema_file: Path = Path("ramses_rf_schema.json")
+    ot_sensors_cache_file: Path = Path("ot_sensors_cache.json")
     save_schema_on_shutdown: bool = False
     max_save_file_count: int = 9
 
@@ -340,6 +341,7 @@ class AppConfig:
             rotate_count=parser.getint("Files", "LOG_FILE_ROTATE_COUNT", fallback=9),
             rotate_bytes=parser.getint("Files", "LOG_FILE_ROTATE_BYTES", fallback=1_000_000),
             schema_file=config_dir.joinpath(schema_filename),
+            ot_sensors_cache_file=config_dir.joinpath("ot_sensors_cache.json"),
             save_schema_on_shutdown=parser.getboolean("Files", "ALWAYS_SAVE_SCHEMA_ON_SHUTDOWN", fallback=False),
             max_save_file_count=parser.getint("Files", "MAX_SAVE_FILE_COUNT", fallback=9),
         )        

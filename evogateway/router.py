@@ -74,6 +74,10 @@ class MessageRouter:
         self._zone_state: dict[str, dict] = {}   # zone_id → latest aggregated state
         self._system_state: dict = {}             # system-level state
 
+        # Optional callback for lazy OT sensor discovery (set by app.py when HA discovery enabled)
+        self._ot_sensor_callback: Callable[[str], None] | None = None
+        self._notified_ot_sensors: set[str] = set()
+
         # Dispatcher: family → handler
         self.family_handlers = {
             "temperature": self.handle_temperature,
@@ -432,6 +436,20 @@ class MessageRouter:
 
         for item in payload:
             parsed = self.parse_message(msg, item)
+
+            # Lazy OT sensor discovery: notify HA discovery the first time each msg_name appears
+            ot_msg_name = (
+                item.get("msg_name")
+                if parsed.device_type == "10" and isinstance(item, dict)
+                else None
+            )
+            if ot_msg_name and ot_msg_name not in self._notified_ot_sensors:
+                self._notified_ot_sensors.add(ot_msg_name)
+                if self._ot_sensor_callback:
+                    try:
+                        self._ot_sensor_callback(ot_msg_name)
+                    except Exception:
+                        self.log.exception("Error in OT sensor discovery callback")
 
             # family dispatch
             family = parsed.family
