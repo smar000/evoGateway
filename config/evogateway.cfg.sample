@@ -195,8 +195,12 @@ THIS_GATEWAY_NAME = evoGateway
 # Width of formatted console rows
 MIN_ROW_LENGTH = 160
 
-# Force the gateway to only use a single HGI device (safety)
-FORCE_SINGLE_HGI = True
+# Merge messages from RF bit-error corrupted device IDs into the known canonical device.
+# Only applies when exactly one device of that type is registered (safe singleton check).
+# OTB and HGI default on (no valid multi-device scenario); CTL defaults off (multi-system is legitimate).
+MERGE_UNKNOWN_OTB = True
+MERGE_UNKNOWN_HGI = True
+MERGE_UNKNOWN_CTL = False
 
 # Console colours (Python dict expression)
 # Leave blank to use defaults

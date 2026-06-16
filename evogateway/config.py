@@ -301,7 +301,9 @@ class WatchdogConfig:
 class MiscConfig:
     this_gateway_name: str = "evoGateway"
     min_row_length: int = DEFAULT_MIN_ROW_LENGTH
-    force_single_hgi: bool = True    
+    merge_unknown_otb: bool = True
+    merge_unknown_hgi: bool = True
+    merge_unknown_ctl: bool = False
     display_colours: Dict[str, str] = field(default_factory=lambda: DEFAULT_COLOURS.copy())
     log_level_int: int = logging.INFO # default to INFO (20)
     log_events_to_console: bool = False
@@ -402,8 +404,10 @@ class AppConfig:
         misc = MiscConfig(
             this_gateway_name=parser.get("Misc", "THIS_GATEWAY_NAME", fallback="evoGateway"),
             min_row_length=parser.getint("Misc", "MIN_ROW_LENGTH", fallback=DEFAULT_MIN_ROW_LENGTH),
-            force_single_hgi=parser.getboolean("Misc", "FORCE_SINGLE_HGI", fallback=True),
-            
+            merge_unknown_otb=parser.getboolean("Misc", "MERGE_UNKNOWN_OTB", fallback=True),
+            merge_unknown_hgi=parser.getboolean("Misc", "MERGE_UNKNOWN_HGI", fallback=True),
+            merge_unknown_ctl=parser.getboolean("Misc", "MERGE_UNKNOWN_CTL", fallback=False),
+
             display_colours=_ensure_colour_scheme(parser.get("Misc", "DISPLAY_COLOURS", fallback=None)),
             log_level_int=log_level_int, # <- Pass the integer value
             log_events_to_console = parser.getboolean("Misc", "EVENTS_CONSOLE_OUTPUT", fallback=False),

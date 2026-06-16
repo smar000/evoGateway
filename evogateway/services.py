@@ -195,6 +195,7 @@ class RamsesService:
         on_sys_config: Callable[[str], Awaitable[None]] | None = None,
         colors: Dict[str, str] | None = None,
         min_row_length: int = DEFAULT_MIN_ROW_LENGTH,
+        gateway_name: str | None = None,
     ) -> None:
         self.gwy_config = gwy_config
         self.log = logger
@@ -204,6 +205,7 @@ class RamsesService:
         self._handle_sys_config = on_sys_config
         self._colors = colors or {}
         self._min_row_length = min_row_length
+        self._gateway_name = gateway_name
 
         # Discovery counters (for auto-sync)
         self._last_dev_count = 0
@@ -362,19 +364,34 @@ class RamsesService:
         if getattr(gwy, "hgi", None) and getattr(gwy.hgi, "id", None):
             self.registry.set_hgi(gwy.hgi.id)
 
-        # Schema alias import from known_list
+        # Schema alias import from known_list; also register types for singleton merge
+        # candidates so canonical_id() has a target to remap to before discovery runs.
+        # For HGI devices (type "18"), override the schema alias with the configured
+        # gateway name immediately — gwy.hgi may not be set yet when the first message
+        # (the puzzle packet) arrives, so we cannot rely on set_hgi() having run.
         known = self.gwy_config.known_list or {}
+        known_ids = set(known.keys())
         for dev_id, meta in known.items():
             alias = meta.get("alias", None)
             if alias:
                 reg.update_alias(dev_id, alias)
+            prefix = dev_id.split(":")[0] if ":" in dev_id else None
+            if prefix and prefix in reg._merge_types:
+                reg.update_device_type(dev_id, prefix)
+            if prefix == "18" and self._gateway_name:
+                reg.update_alias(dev_id, self._gateway_name)
 
-        # Live discovery: device types and zones 
+        # Live discovery: device types and zones.
+        # For singleton merge types, skip devices not in known_list — discovered phantom
+        # IDs (e.g. evofw internal IDs) must not enter type_of_id or canonical_id() will
+        # see them as "already known" and refuse to remap them.
         for dev_id, dev in gwy.device_registry.device_by_id.items():
 
             # Device Type (e.g. "04", "10")
             dev_type = getattr(dev, "type", None)
             if dev_type:
+                if dev_type in reg._merge_types and dev_id not in known_ids:
+                    continue  # phantom singleton — skip
                 reg.update_device_type(dev_id, dev_type)
 
             # Zone Index
@@ -404,7 +421,12 @@ class RamsesService:
                 if zone_idx:
                     reg.ufh_map[(ufh_dev_id, str(circuit_id))] = zone_idx
 
-        # Update internal counters for discovery auto-sync 
+        # Re-apply configured gateway name — known_list may have overwritten it with a
+        # schema alias (e.g. "HGI"), so we enforce the user-configured name last.
+        if self.registry.hgi_id and self._gateway_name:
+            reg.update_alias(self.registry.hgi_id, self._gateway_name)
+
+        # Update internal counters for discovery auto-sync
         self._last_dev_count = len(gwy.device_registry.device_by_id)
 
         tcs = getattr(gwy, "tcs", None)
@@ -565,6 +587,15 @@ class RamsesService:
             pass
         # Registry auto-sync when new devices/zones discovered by ramses
         try:
+            # Always keep HGI registered so canonical_id() can remap evofw phantom IDs.
+            # Also enforce the configured gateway name as the alias — known_list syncs
+            # can overwrite it with the schema alias (e.g. "HGI") between restarts.
+            if getattr(self.gwy, "hgi", None) and getattr(self.gwy.hgi, "id", None):
+                hgi_id = self.gwy.hgi.id
+                self.registry.set_hgi(hgi_id)
+                if self._gateway_name:
+                    self.registry.update_alias(hgi_id, self._gateway_name)
+
             dev_count = len(self.gwy.device_registry.device_by_id)
             tcs = getattr(self.gwy, "tcs", None)
             zone_by_idx = getattr(tcs, "zone_by_idx", {}) if tcs else {}

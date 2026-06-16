@@ -98,7 +98,13 @@ class MessageRouter:
         src_id = getattr(msg.src, "id", None)
         dst_id = getattr(msg.dst, "id", None)
 
-        # Basic metadata 
+        # Remap corrupted singleton device IDs to their canonical counterpart
+        canonical = self.registry.canonical_id(src_id)
+        if canonical != src_id:
+            self.log.debug("Singleton merge: %s → %s", src_id, canonical)
+            src_id = canonical
+
+        # Basic metadata
         verb = getattr(msg, "verb", "")
         code = getattr(msg, "code_name", "")
         dtm_obj = getattr(msg, "dtm", None)

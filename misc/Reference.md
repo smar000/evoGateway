@@ -302,12 +302,26 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
 | `zone_name(zone_id)` | Returns "Kitchen" for zone "01". |
 | `zone_of(dev_id)` | Returns the zone index a device belongs to. |
 | `ufh_zone_for` | Maps UFH Controller + Circuit ID -\> Zone Index. |
+| `canonical_id(device_id)` | Remaps corrupted singleton device IDs (see below). |
 | `load_from_schema` | Populates initial state from the JSON file. |
 | `update_alias`, `update_zone` | Methods for live updates during discovery. |
 | Various | Update methods used by RamsesService during discovery.|
 
+#### Singleton ID Merging
+
+RF bit errors occasionally corrupt device IDs in received packets, causing messages from known devices (CTL, OTB, HGI) to appear under phantom IDs like `18:136712` instead of `18:000073`. Three independent config flags in `[Misc]` control this per device type:
+
+| Config key | Type | Default | Rationale |
+| :--- | :--- | :--- | :--- |
+| `MERGE_UNKNOWN_OTB` | bool | `True` | No valid multi-OTB scenario exists |
+| `MERGE_UNKNOWN_HGI` | bool | `True` | Multiple HGIs are rare/unusual |
+| `MERGE_UNKNOWN_CTL` | bool | `False` | Multiple controllers (multi-system) is legitimate |
+
+`canonical_id()` silently remaps an unrecognised device ID to the known device of that type, provided **exactly one** device of that type is already registered. If none is registered yet, or more than one is known (e.g., genuine bleed-through from a neighbour's controller), the message passes through unchanged. Remaps are logged at DEBUG level.
+
 ### How It Links
 
+* **Router** calls `canonical_id()` on `src_id` in `parse_message()` before any topic building or registry lookups.
 * **Router** uses registry to resolve names for display and MQTT.
 * **ParsedMessage** uses registry to derive zone name, id, and type.
 * **RamsesService** populates and syncs this registry.
@@ -326,7 +340,7 @@ Manages file I/O for `ramses_rf_schema.json`. Handles file rotation (backups `.1
         * Builds a full **TopicLayout** object used everywhere.
       * **RamsesConfig**: discovery/eavesdrop/sending settings.
       * **WatchdogConfig**: heartbeat/watchdog loop settings — `WATCHDOG_CHECK_INTERVAL` (poll frequency, default 60 s; `0` disables everything), `MQTT_HEARTBEAT_INTERVAL`, and the four RF silence thresholds (`RF_WARN_TIMEOUT`, `RF_RESTART_TIMEOUT`, `RF_PROCESS_RESTART_TIMEOUT`, `RF_EXIT_TIMEOUT`). All RF thresholds are accurate to ±`WATCHDOG_CHECK_INTERVAL`.
-      * **MiscConfig**: output formatting, colours, gateway name.
+      * **MiscConfig**: output formatting, colours, gateway name, `merge_unknown_otb`/`merge_unknown_hgi`/`merge_unknown_ctl` flags.
       * **AppConfig**: master object combining all config sections.
 
 | Class / Function | Description |

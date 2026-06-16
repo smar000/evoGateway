@@ -12,15 +12,26 @@ class DeviceRegistry:
       • Explicit updates from services/router (future use)
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        merge_unknown_otb: bool = True,
+        merge_unknown_hgi: bool = True,
+        merge_unknown_ctl: bool = False,
+    ) -> None:
         # Device metadata
         self.alias_of_id: Dict[str, str] = {}          # e.g. {"34:112233": "living_room_thermostat"}
-        self.type_of_id: Dict[str, str] = {}           # all device IDs and their types 
+        self.type_of_id: Dict[str, str] = {}           # all device IDs and their types
         self.zone_of_id: Dict[str, str] = {}           # zone index -> device ID mappings
         self.zone_names: Dict[str, str] = {}           # zone index -> human-readable name
         self.ufh_map: dict[tuple[str, str], str] = {}  # (ufh_dev_id, ufh_circuit) -> zone_idx
         self.hgi_id: str = ""                          # Connected HGI id from gwy
         self.this_gateway_name = None                  # Our friendly name for the HGI/evogateway
+
+        # Build the set of type prefixes eligible for singleton ID merging
+        self._merge_types: frozenset[str] = frozenset(
+            t for t, flag in (("10", merge_unknown_otb), ("18", merge_unknown_hgi), ("01", merge_unknown_ctl))
+            if flag
+        )
 
     # Public lookup helpers used by router and models
     
@@ -68,6 +79,23 @@ class DeviceRegistry:
         if dev_id is None:
             return None
         return self.type_of_id.get(str(dev_id))
+
+    def canonical_id(self, device_id: str | None) -> str | None:
+        """Return the canonical device ID, merging unknown singleton-type devices.
+
+        If a device ID is unrecognised but its type prefix is in the active merge
+        set and exactly one device of that type is registered, returns that known
+        device's ID. Otherwise returns the original ID unchanged.
+        """
+        if not device_id or not self._merge_types:
+            return device_id
+        if device_id in self.type_of_id:
+            return device_id  # already known — no remap needed
+        prefix = device_id.split(":")[0] if ":" in device_id else None
+        if not prefix or prefix not in self._merge_types:
+            return device_id
+        candidates = [k for k, v in self.type_of_id.items() if v == prefix]
+        return candidates[0] if len(candidates) == 1 else device_id
 
     def friendly_name_of(self, dev_id: str) -> str:
         """Return device type and alias combination """
@@ -127,6 +155,12 @@ class DeviceRegistry:
     def set_hgi(self, hgi_id: str, friendly_name: str | None = None):
         self.hgi_id = hgi_id
         self.this_gateway_name = friendly_name
+        if hgi_id:
+            if "18" in self._merge_types:
+                # Purge any stale phantom HGI entries so canonical_id() finds exactly one
+                for k in [k for k, v in self.type_of_id.items() if v == "18" and k != hgi_id]:
+                    del self.type_of_id[k]
+            self.type_of_id[hgi_id] = "18"  # ensure canonical_id() can find it
 
     def count_zones_in_gwy(self, gwy) -> int:
         tcs = getattr(gwy, "tcs", None)

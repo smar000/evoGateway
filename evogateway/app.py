@@ -50,7 +50,11 @@ class EvoGatewayApp:
         self._restart_process: bool = False
         self._shutdown_reason: str = ""
 
-        self.registry = DeviceRegistry()
+        self.registry = DeviceRegistry(
+            merge_unknown_otb=cfg.misc.merge_unknown_otb,
+            merge_unknown_hgi=cfg.misc.merge_unknown_hgi,
+            merge_unknown_ctl=cfg.misc.merge_unknown_ctl,
+        )
 
         self._loaded_schema: dict[str, Any] | None = None        
         self.persistence = PersistenceService(            
@@ -396,12 +400,13 @@ class EvoGatewayApp:
         self.ramses = RamsesService(
             gwy_config=gwy_config,
             logger=self.log,
-            registry=self.registry,  
+            registry=self.registry,
             on_message=self.router.handle_message,
             publish_schema=self._publish_schema_snapshot,
             on_sys_config=self._handle_sys_config,
             colors=self.cfg.misc.display_colours,
             min_row_length=self.cfg.misc.min_row_length,
+            gateway_name=self.cfg.misc.this_gateway_name,
         )
 
         # Schedule
