@@ -337,7 +337,7 @@ class ParsedMessage:
             if self.zone_id in RELAY_ZONE_IDS:   # relay pseudo-zones
                 code = f"{self.code.lower()}/_domain_{self.zone_id.upper()}_{RELAY_ZONE_IDS[self.zone_id].lower()}"
             elif dev_type == "10" and "msg_name" in self.payload:
-                code = f"{self.code.lower()}/{self.payload['msg_name'].lower()}"
+                code = f"{self.code.lower()}/{to_snake_case(self.payload['msg_name'])}"
             else:
                 code = self.code
             code_snake = to_snake_case(code)
@@ -395,7 +395,7 @@ class ParsedMessage:
         if self.zone_id in RELAY_ZONE_IDS:
             code = f"{self.code.lower()}/_domain_{self.zone_id.upper()}_{RELAY_ZONE_IDS[self.zone_id].lower()}"
         elif dev_type == "10" and "msg_name" in self.payload:
-            code = f"{self.code.lower()}/{self.payload['msg_name'].lower()}"
+            code = f"{self.code.lower()}/{to_snake_case(self.payload['msg_name'])}"
         else:
             code = self.code
 
@@ -517,8 +517,7 @@ class ParsedMessage:
     #     if self.zone_id in RELAY_ZONE_IDS:
     #         code = f"{self.code.lower()}/_domain_{self.zone_id.upper()}_{RELAY_ZONE_IDS[self.zone_id].lower()}"
     #     elif dev_type == "10" and "msg_name" in self.payload:
-    #         # OTB special case: append msg_name
-    #         code = f"{self.code.lower()}/{self.payload['msg_name'].lower()}"
+    #         code = f"{self.code.lower()}/{to_snake_case(self.payload['msg_name'])}"
     #     else:
     #         code = self.code
 

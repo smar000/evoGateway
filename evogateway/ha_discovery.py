@@ -54,10 +54,10 @@ DEVICE_SENSORS: dict[str, list[dict]] = {
         # Domain-specific heat demand (OTB relays FC/UFH demand)
         {"msg_code": "heat_demand/_domain_fc_ufh", "field": "heat_demand", "name": "UFH Heat Demand", "unit": "%", "state_class": "measurement", "value_template": "{{ (value_json.heat_demand * 100) | round(1) }}"},
         # OpenTherm protocol message sub-topics
-        {"msg_code": "opentherm_msg/boilerwatertemperature",  "field": "value",       "name": "Boiler Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/returnwatertemperature",  "field": "value",       "name": "Return Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/chwaterpressure",         "field": "value",       "name": "CH Water Pressure",   "class": "pressure",    "unit": "bar", "state_class": "measurement"},
-        {"msg_code": "opentherm_msg/relativemodulationlevel", "field": "value",       "name": "Modulation Level",    "unit": "%",            "state_class": "measurement", "value_template": "{{ (value_json.value * 100) | round(1) }}"},
+        {"msg_code": "opentherm_msg/boiler_water_temperature",  "field": "value",       "name": "Boiler Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/return_water_temperature", "field": "value",       "name": "Return Water Temp",   "class": "temperature", "unit": "°C",  "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/ch_water_pressure",        "field": "value",       "name": "CH Water Pressure",   "class": "pressure",    "unit": "bar", "state_class": "measurement"},
+        {"msg_code": "opentherm_msg/relative_modulation_level","field": "value",       "name": "Modulation Level",    "unit": "%",            "state_class": "measurement", "value_template": "{{ (value_json.value * 100) | round(1) }}"},
         {"msg_code": "opentherm_msg/fault_flags",             "field": "description", "name": "Fault Description"},
         {"msg_code": "opentherm_msg/fault_flags",             "field": "value_lb",    "name": "OEM Fault Code",      "state_class": "measurement"},
     ],
