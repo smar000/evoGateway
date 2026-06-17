@@ -772,7 +772,7 @@ Look for the method `topic_base`.
 
 ### ~~ramses_rf 0.57.0 — W command echo causes AssertionError in internal handler~~ *(resolved in 0.57.1)*
 
-**Fixed in ramses_rf 0.57.1** (released 2026-06-16). The fix ([PR #695](https://github.com/ramses-rf/ramses_rf/pull/695)) adds `"18"` (HGI Gateway) and `"30"` (RFG100 Gateway) to the permitted device-type tuple in the `Zone._handle_msg` assertion in `systems/zones.py`. The custom asyncio exception handler workaround that was in `app.py → EvoGatewayApp.run()` has been removed as of evoGateway v4.6.0.
+**Fixed in ramses_rf 0.57.1** (released 2026-06-16). The fix ([PR #695](https://github.com/ramses-rf/ramses_rf/pull/695)) adds `"18"` (HGI Gateway) and `"30"` (RFG100 Gateway) to the permitted device-type tuple in the `Zone._handle_msg` assertion in `systems/zones.py`. The custom asyncio exception handler workaround that was in `app.py → EvoGatewayApp.run()` has been removed as of evoGateway v4.6.1.
 
 ### Dual-HGI / secondary gateway on the same RF network
 
