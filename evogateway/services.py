@@ -230,12 +230,14 @@ class RamsesService:
 
         # Re-run after gwy.start() so gwy.tcs is available for zone names and UFH circuits
         self._refresh_zones()
-        await self._publish_schema()
 
+        # Populate zone names before publishing schema so the /zones topic has real names
         self._update_zone_names_from_schema()
 
         # Load UFH mappings from schema as these also do not always come through live
         self._load_ufh_mapping_from_schema()
+
+        await self._publish_schema()
 
         # Initial sync from gwy after gwy is started/populated
         self.sync_registry_from_gwy()
