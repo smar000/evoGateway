@@ -232,7 +232,6 @@ class RamsesService:
         self._refresh_zones()
         await self._publish_schema()
 
-        # TODO! Check why zone names not coming through after gateway start. Temp fix for now
         self._update_zone_names_from_schema()
 
         # Load UFH mappings from schema as these also do not always come through live
@@ -329,17 +328,27 @@ class RamsesService:
         return changed
 
     def _update_zone_names_from_schema(self):
-        """Update zone names in the gateway TCS zones from the schema data, as they 
-           don't always seem to come through from the gateway."""
+        """Populate zone names from our schema config.
 
-        # Make sure we actually have a valid schema/tcs
+        ramses_rf does not populate zone._name from the schema we provide — it only
+        sets it when RF packet 0004 arrives. We bridge this by reading names from
+        gwy_config.schema and writing them both to the ramses zone objects (so
+        display_device_list sees correct names) and directly to the registry (so
+        MQTT topic generation doesn't depend on reading _name back via zone_by_idx).
+        """
         if not (self.gwy.tcs and self.gwy.tcs.id):
-            self.log.warn("GWY does not have a valid schema from which to update zone names")
+            self.log.warning("GWY does not have a valid TCS from which to update zone names")
             return
-        
+
         tcs_schema = self.gwy_config.schema.get(self.gwy.tcs.id, {})
-        for zone_id, zone in tcs_schema.get("zones", {}).items():
-            self.gwy.tcs.zones[int(zone_id,16)]._name = zone.get("_name", f"Zone {zone_id}")
+        for zone_id, zone_data in tcs_schema.get("zones", {}).items():
+            name = zone_data.get("_name")
+            if not name:
+                continue
+            zone_obj = self.gwy.tcs.zone_by_idx.get(zone_id)
+            if zone_obj:
+                zone_obj._name = name
+            self.registry.update_zone_name(zone_id, name)
 
     def _load_ufh_mapping_from_schema(self):
         """Load UFH circuit zone mappings directly from the schema file
@@ -407,12 +416,11 @@ class RamsesService:
                 reg.update_zone(dev_id, zone_id)
 
             # Zone Name (if available)
-            try:
-                zone_name =  getattr(self.gwy.tcs.zones[int(zone_id,16)], "_name", None) if (self.gwy.tcs and zone_id) else None
-                if zone_id and zone_name:
+            if self.gwy.tcs and zone_id:
+                zone_obj = self.gwy.tcs.zone_by_idx.get(zone_id)
+                zone_name = getattr(zone_obj, "_name", None) if zone_obj else None
+                if zone_name:
                     reg.update_zone_name(zone_id, zone_name)
-            except Exception:
-                pass
 
         # UFH Circuit -> Zone mappings (consistent style)
         reg.ufh_map.clear()
@@ -635,7 +643,7 @@ class RamsesService:
         try:
             if self.gwy.tcs:
                 for idx, zone in self.gwy.tcs.zone_by_idx.items():
-                    zid = f"{idx:02X}"
+                    zid = idx  # already a zero-padded hex string e.g. "00"
                     name = getattr(zone, '_name', None)
                     if name:
                         self.zones[zid] = name
