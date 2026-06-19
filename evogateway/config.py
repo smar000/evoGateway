@@ -90,6 +90,7 @@ LOG_LEVELS = {
 class FilesConfig:
     events_file: Path = Path("events.log")
     packet_log_file: Path = Path("packet.log")
+    packet_log_retention_days: int = 7
     rotate_count: int = 9
     rotate_bytes: int = 1_000_000
     schema_file: Path = Path("ramses_rf_schema.json")
@@ -340,6 +341,7 @@ class AppConfig:
         files = FilesConfig(
             events_file=logs_dir.joinpath(events_filename),
             packet_log_file=logs_dir.joinpath(packet_filename),
+            packet_log_retention_days=parser.getint("Files", "PACKET_LOG_RETENTION_DAYS", fallback=7),
             rotate_count=parser.getint("Files", "LOG_FILE_ROTATE_COUNT", fallback=9),
             rotate_bytes=parser.getint("Files", "LOG_FILE_ROTATE_BYTES", fallback=1_000_000),
             schema_file=config_dir.joinpath(schema_filename),

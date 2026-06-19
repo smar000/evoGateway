@@ -116,13 +116,16 @@ class EvoGatewayApp:
         else:
             print_formatted_row("Discovery mode enabled")
 
-        # TODO: packet_log format changed in ramses_rf 0.57.0 — field names changed
-        # (file_name → packet_log_path, rotate_backups count → packet_log_retention_days
-        # in days). Restore packet logging once the new format is mapped.
         engine = EngineConfig(
             port_name=self.cfg.serial.port,
             disable_sending=self.cfg.ramses.disable_sending,
             enforce_known_list=enforce_known_list,
+            packet_log={
+                "packet_log_path": str(self.cfg.files.packet_log_file.parent),
+                "packet_log_prefix": self.cfg.files.packet_log_file.stem,
+                "packet_log_retention_days": self.cfg.files.packet_log_retention_days,
+                "rotate_bytes": self.cfg.files.rotate_bytes,
+            },
         )
 
         return GatewayConfig(

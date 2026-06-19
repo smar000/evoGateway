@@ -32,8 +32,8 @@ EVENTS_FILE = events.log
 # Log of raw packets from ramses_rf
 PACKET_LOG_FILE = packet.log
 
-# Number of rotated logs to keep
-LOG_FILE_ROTATE_COUNT = 9
+# Number of days to retain rotated packet logs
+PACKET_LOG_RETENTION_DAYS = 7
 
 # Rotate packet.log when this many bytes are reached
 LOG_FILE_ROTATE_BYTES = 1000000
