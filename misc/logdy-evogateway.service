@@ -1,0 +1,18 @@
+[Unit]
+Description=Logdy Web Log Viewer for evoGateway Events
+After=network.target
+
+[Service]
+Type=simple
+Environment=LOGDY_PORT=9191
+Environment=LOGDY_UI_IP=0.0.0.0
+Environment=LOGDY_APPEND=true
+User=root
+Group=root
+WorkingDirectory=/opt/evogateway/logs
+ExecStart=/usr/local/bin/logdy follow /opt/evogateway/logs/events.log --full-read
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

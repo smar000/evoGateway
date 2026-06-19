@@ -1,0 +1,95 @@
+{
+	"name": "main",
+	"columns": [
+		{
+			"id": "125497",
+			"name": "raw",
+			"handlerTsCode": "(line: Message): CellHandler => {\n          return { text: line.content || \"-\"}\n      }",
+			"idx": 0,
+			"width": 568,
+			"hidden": true
+		},
+		{
+			"id": "819423",
+			"name": "Time",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"time\"] || \"-\" }\n}",
+			"faceted": false,
+			"idx": 1,
+			"width": 150
+		},
+		{
+			"id": "102286",
+			"name": "SourceType",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"sourceType\"] || \"\" }\n}",
+			"faceted": false,
+			"idx": 2,
+			"width": 40
+		},
+		{
+			"id": "870705",
+			"name": "From",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"from\"] || \"\" }\n}",
+			"faceted": false,
+			"idx": 5,
+			"width": 150
+		},
+		{
+			"id": "196402",
+			"name": "To",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"to\"] || \"\" }\n}",
+			"faceted": false,
+			"idx": 6,
+			"width": 150
+		},
+		{
+			"id": "115618",
+			"name": "Verb",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"verb\"] || \"\" }\n}",
+			"faceted": false,
+			"idx": 8,
+			"width": 43
+		},
+		{
+			"id": "519295",
+			"name": "Function",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"function\"] || \"-\" }\n}",
+			"faceted": false,
+			"idx": 7,
+			"width": 150
+		},
+		{
+			"id": "038616",
+			"name": "Zone",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"zone\"] || \"\" }\n}",
+			"faceted": false,
+			"idx": 8,
+			"width": 40
+		},
+		{
+			"id": "096941",
+			"name": "Payload",
+			"handlerTsCode": "(line: Message): CellHandler => {\n    return { text: line[\"payload\"] ? JSON.stringify(line[\"payload\"]) : \"-\" }\n}",
+			"faceted": false,
+			"idx": 4,
+			"width": 1882
+		}
+	],
+	"settings": {
+		"leftColWidth": 300,
+		"drawerColWidth": 900,
+		"maxMessages": 1000,
+		"middlewares": [
+			{
+				"id": "m_071648",
+				"name": "evogateway",
+				"handlerTsCode": "(line: Message): Message | void => {\n    if (line && line.content) {\n        const text = line.content;\n\n        // Initialize style object if it doesn't exist\n        line.style = line.style || {};\n\n        // --- HIGH PRIORITY MATCHES ---\n\n        // Command (high priority) - White text, strong reddish background (multitail 203)\n        if (/.*Command.*Failed.*/.test(text)) {\n            line.style = { \"color\": \"#ffffff\", \"background\": \"#ff5f5f\", \"font-weight\": \"bold\" };\n        } \n        // Command Send - Light sky blue text (multitail 111)\n        else if (/.*(Command Send).*/.test(text)) {\n            line.style = { \"color\": \"#87afff\" };\n        } \n        // MQTT messages — Light Green text (multitail 120)\n        else if (/.*MQTT.*/.test(text)) {\n            line.style = { \"color\": \"#87ff87\" };\n        } \n        // System-level messages - Green text on Red background\n        else if (/.*_SYSTEM_.*/.test(text)) {\n            line.style = { \"color\": \"#00ff00\", \"background\": \"#ff0000\" };\n        } \n        // Demand — Warm orange text (multitail 216)\n        else if (/.*_demand.*/.test(text)) {\n            line.style = { \"color\": \"#ffaf87\" };\n        } \n\n        // --- CONTEXTUAL TEMPERATURE / DHW MATCHES ---\n        \n        // Temperature & DHW (override RP/W/I base colors but NOT RQ) - Pale sand text (multitail 187)\n        else if (/.*\\|\\s*(RP|W|I)\\s*\\|.*(temperature|dhw_temp|dhw_mode).*/.test(text)) {\n            line.style = { \"color\": \"#d7d7af\" };\n        } \n\n        // --- RF PROTOCOL VERBS FALLBACKS ---\n\n        // Information frames (I) - Soft light blue text (multitail 153)\n        else if (/.*\\|\\s*I\\s*\\|.*/.test(text)) {\n            line.style = { \"color\": \"#afffff\" };\n        } \n        // Requests (RQ) — Light Black / Dark Gray text (multitail 248)\n        else if (/.*\\|\\s*RQ\\s*\\|.*/.test(text)) {\n            line.style = { \"color\": \"#a8a8a8\" };\n        } \n        // Replies (RP) — Bold White text\n        else if (/.*\\|\\s*RP\\s*\\|.*/.test(text)) {\n            line.style = { \"color\": \"#ffffff\", \"font-weight\": \"bold\" };\n        } \n        // Writes (W) — Bold Light Magenta text (multitail 213)\n        else if (/.*\\|\\s*W\\s*\\|.*/.test(text)) {\n            line.style = { \"color\": \"#ff87ff\", \"font-weight\": \"bold\" };\n        }\n    }\n\n    return line;\n}"
+			},
+			{
+				"id": "m_597906",
+				"name": "evogateway-line-split",
+				"handlerTsCode": "// 2026-06-18 22:30:45 |   | |   |                    | Opentherm Bridge   |  I | opentherm_sync   |  00  || {'ticker': 962}\n// 2026-06-18 22:30:59 |   | |01 | Controller         | Opentherm Bridge   | RQ | actuator_state   |  00  || {}\n// 2026-06-18 22:30:59 |   | |10 | Opentherm Bridge   | Controller         | RP | actuator_state   |  00  || {'modulation_level': 0.0, '_flags_2': '10', '_flags_3': [0, 0, 0, 0, 0, 0, 0, 0], 'ch_active': False, 'dhw_active': False, 'cool_active': False, 'flame_on': False, '_unknown_4': '00', '_unknown_5': 'FF'}\n// 2026-06-18 22:34:16 |   | MQTT message received: {'command': 'get_system_time'}\n// 2026-06-18 22:34:16 |   | Command Send Status: Transmitted (command=get_system_time)\n// 2026-06-18 22:34:16 |   | |18 | evogateway         | Controller         | RQ | datetime         |  00  || {}\n// 2026-06-18 22:34:16 |   | Command Send Status: Successful (command=get_system_time)\n// 2026-06-18 22:34:16 |   | |01 | Controller         | evogateway         | RP | datetime         |  00  || {'datetime': '2026-06-18T22:34:21', 'is_dst': True, '_unknown_0': 'FC'}\n// |01 | Controller         | Controller         |  I | temperature      |  00  || [{'zone_idx': '00', 'temperature': 23.82}, ...]\n\n(line: Message): Message | void => {\n    if (!line || !line.content) return line;\n\n    let text = line.content.trim();\n\n    if (text.startsWith(\"⬤\")) {\n        text = text.substring(1).trim();\n    }\n\n    const DEVICE_TYPES = { \"01\": \"CTL\", \"02\": \"UFH\", \"04\": \"TRV\", \"07\": \"DHW\", \"10\": \"OTB\", \"13\": \"RLY\", \"18\": \"HGI\", \"34\": \"THM\" };\n\n    // Protocol rows always have || followed by a JSON object { or array [.\n    // Previously only matched {, which caused array-payload rows (e.g. temperature)\n    // to fall through to the system-message branch and dump the whole line into function.\n    if (/\\|\\|\\s*[{[]/.test(text)) {\n        const doubleBar = text.indexOf(\"||\");\n        const metaSection = text.substring(0, doubleBar);\n        const payloadSection = text.substring(doubleBar + 2).trim() || \"{}\";\n\n        const cols = metaSection.split(\"|\").map(c => c.trim()).filter(c => c !== \"\");\n\n        line[\"time\"] = cols[0] || \"\";\n        const sourceType = cols[1] || \"\";\n        line[\"sourceType\"] = DEVICE_TYPES[sourceType] || sourceType;\n        line[\"from\"] = cols[2] || \"\";\n        line[\"to\"] = cols[3] || \"\";\n        line[\"verb\"] = cols[4] || \"\";\n        line[\"function\"] = cols[5] || \"\";\n        line[\"zone\"] = cols[6] || \"\";\n\n        // I-type rows have no sourceType or from-device; empty cols filter away leaving only 5.\n        // Must check cols.length alone — the old condition (verb === \"\") never fired because\n        // the initial mapping puts \"00\" (zone) into verb for these rows, which is not empty.\n        if (cols.length === 5) {\n            const DEVICE_NAMES: Record<string, string> = {\n                \"Opentherm Bridge\": \"OTB\", \"Controller\": \"CTL\", \"evogateway\": \"HGI\"\n            };\n            const toDevice = cols[1] || \"\";\n            line[\"sourceType\"] = DEVICE_NAMES[toDevice] || \"\";\n            line[\"from\"] = \"\";\n            line[\"to\"] = toDevice;\n            line[\"verb\"] = cols[2] || \"\";\n            line[\"function\"] = cols[3] || \"\";\n            line[\"zone\"] = cols[4] || \"\";\n        }\n\n        try {\n            let jsonValidStr = payloadSection\n                .replace(/'/g, '\"')\n                .replace(/True/g, 'true')\n                .replace(/False/g, 'false')\n                .replace(/None/g, 'null');\n            line[\"payload\"] = JSON.parse(jsonValidStr);\n        } catch (e) {\n            line[\"payload\"] = payloadSection;\n        }\n\n    } else {\n        // Use pipe positions directly so any | inside a message body is preserved.\n        const firstPipe = text.indexOf(\"|\");\n        const timestamp = firstPipe !== -1 ? text.substring(0, firstPipe).trim() : text;\n        const secondPipe = firstPipe !== -1 ? text.indexOf(\"|\", firstPipe + 1) : -1;\n        const messageBody = secondPipe !== -1 ? text.substring(secondPipe + 1).trim() : \"\";\n\n        line[\"time\"] = timestamp;\n        line[\"sourceType\"] = \"\";\n        line[\"from\"] = \"\";\n        line[\"to\"] = \"\";\n        line[\"verb\"] = \"\";\n        line[\"zone\"] = \"\";\n        line[\"payload\"] = \"\";\n\n        if (messageBody.startsWith(\"MQTT message received:\")) {\n            const jsonPart = messageBody.replace(\"MQTT message received:\", \"\").trim();\n            line[\"from\"] = \"MQTT\";\n            line[\"function\"] = \"mqtt_in\";\n            try {\n                let jsonValidStr = jsonPart\n                    .replace(/'/g, '\"')\n                    .replace(/True/g, 'true')\n                    .replace(/False/g, 'false')\n                    .replace(/None/g, 'null');\n                line[\"payload\"] = JSON.parse(jsonValidStr);\n            } catch (e) {\n                line[\"payload\"] = jsonPart;\n            }\n            line.style = { \"color\": \"#7ec8e3\" };\n\n        } else if (messageBody.startsWith(\"Command Send Status:\")) {\n            const match = messageBody.match(/Command Send Status:\\s*(\\w+)\\s*\\(command=([^)]+)\\)/);\n            line[\"from\"] = \"MQTT\";\n            line[\"function\"] = \"cmd_status\";\n            if (match) {\n                line[\"payload\"] = { status: match[1], command: match[2] };\n                line.style = match[1] === \"Successful\"\n                    ? { \"color\": \"#90ee90\" }\n                    : { \"color\": \"#ffd700\" };\n            } else {\n                line[\"payload\"] = messageBody;\n                line.style = { \"color\": \"#ffd700\" };\n            }\n\n        } else {\n            line[\"function\"] = messageBody;\n            line.style = { \"color\": \"#a8a8a8\", \"font-style\": \"italic\" };\n        }\n    }\n\n    return line;\n}"
+			}
+		],
+		"entriesOrder": "desc"
+	}
+}
