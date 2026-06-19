@@ -437,6 +437,9 @@ class EvoGatewayApp:
             self._shutdown_reason = self._shutdown_reason or "keyboard interrupt"
         except (SystemExit, asyncio.CancelledError):
             pass  # reason already logged/set by the triggering code path
+        except Exception as ex:
+            self._shutdown_reason = self._shutdown_reason or f"unhandled error: {ex}"
+            self.log.exception("Unhandled error in main loop")
 
         finally:
             _sep = "=" * 80
@@ -514,7 +517,9 @@ class EvoGatewayApp:
 
         while True:
             await asyncio.sleep(cfg.watchdog_check_interval)
-            now = local_now(self.cfg.misc.use_local_time)
+            # Keep watchdog arithmetic timezone-aware so it can subtract the
+            # aware timestamp stored in RamsesService.last_rf_message_ts.
+            now = _dt.datetime.now().astimezone()
 
             # --- MQTT heartbeat (disabled when interval == 0) ---
             if cfg.mqtt_heartbeat_interval > 0 and self.mqtt and (
@@ -581,7 +586,7 @@ class EvoGatewayApp:
                 try:
                     await self.ramses.restart()
                     rf_restarted = True
-                    restart_at = local_now(self.cfg.misc.use_local_time)
+                    restart_at = now
                     msg = "RF watchdog: RF layer restart completed"
                     self.log.info(msg)
                     print_formatted_row(msg, style_prefix=self.cfg.misc.display_colours.get("INFO", ""), min_row_length=self.cfg.misc.min_row_length)
