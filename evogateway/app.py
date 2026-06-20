@@ -136,6 +136,7 @@ class EvoGatewayApp:
             known_list=known_list,
             block_list=block_list,
             engine=engine,
+            database_path=str(self.cfg.files.packet_log_file.parent / "ramses.db"),
         )
 
     # MQTT inbound

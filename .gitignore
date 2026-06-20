@@ -4,9 +4,11 @@ __pycache__/
 *$py.class
 *.pyc
 
-# Logs and bakckup files
+# Logs and backup files
 logs/
 *.log
+*.log.*
+*.db
 *.old.*
 bak_*
 old_*
