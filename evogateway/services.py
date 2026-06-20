@@ -168,9 +168,6 @@ class MQTTService:
         ts = _dt.datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S") if self.use_local_time else _dt.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         return {"status": status, "status_ts": ts, "version": GATEWAY_VERSION}
 
-    def _build_status_payload(self, status: str) -> dict:
-        """Backwards-compatible alias: delegate to format_status_payload()."""
-        return self.format_status_payload(status)
 
 
 @dataclass
@@ -271,52 +268,6 @@ class RamsesService:
         await self.gwy.start()
         # Intentionally do NOT reset last_rf_message_ts here — the watchdog
         # measures silence from the last real RF message, not from the restart time.
-
-    def _check_discovery_updates(self):
-        dev_count = len(self.gwy.device_registry.device_by_id)
-        if dev_count != self._last_dev_count:
-            self.registry.update_from_gateway(self.gwy)
-            self._last_dev_count = dev_count
-
-    def device_alias(self, device_id: str) -> str:
-        """Return the alias stored in the Ramses schema, or '' if not set."""
-        try:
-            if not self.gwy:
-                return ""
-            entry = (self.gwy_config.known_list or {}).get(device_id, {})
-            alias = entry.get("alias", "")
-            return alias or ""
-        except Exception:
-            return ""
-
-    def device_type(self, device_id: str) -> str:
-        """Return device type code based on the HEX prefix."""
-        try:
-            prefix = device_id.split(":")[0]
-            return DEV_TYPE_MAP.get(prefix, "")
-        except Exception:
-            return ""
-
-    def device_zone(self, device_id: str) -> str | None:
-        """Return zone index string (e.g. '07') of the device."""
-        try:
-            dev = self.gwy.get_device(device_id)
-            return getattr(getattr(dev, "zone", None), "zone_idx", None)
-        except Exception:
-            return None
-
-    def zone_name(self, zone_id: Optional[str]) -> Optional[str]:
-        if not zone_id:
-            return None
-        return self.zones.get(zone_id)
-
-    def device_label(self, device_id: str) -> str:
-        """Return 'TRV Bedroom' style label for console/log display."""
-        alias = self.registry.alias(device_id)
-        dev_type = self.registry.device_type(device_id)
-        if alias:
-            return f"{dev_type} {alias}"
-        return dev_type
 
     def check_schema_changed(self) -> bool:
         """Detect whether ramses_rf has discovered new devices or zones."""

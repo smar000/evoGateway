@@ -273,22 +273,6 @@ class MessageRouter:
 
         self._update_and_publish_state(parsed)
 
-    # def _publish_received_payload(self, parsed: ParsedMessage) -> None:
-    #     """Publish MQTT output using the structured ParsedMessage helpers."""
-
-    #     # Build the topic using ParsedMessage helpers
-    #     topic = parsed.topic_base(topics=self.mqtt_topics)
-    #     payload = parsed.payload.copy()
-        
-    #     payload["timestamp"] = parsed.timestamp
-    #     self.mqtt.publish(topic, payload)
-
-    #     # Timestamp in case we are not publishing the whole json
-    #     ts_topic = f"{topic}/{parsed.topic_code()}_ts"
-    #     self.mqtt.publish(ts_topic, parsed.timestamp)  
-
-
-
     # Extras
     def display_device_list(self, ramses):
         """Pretty-print the list of devices grouped by zone."""
