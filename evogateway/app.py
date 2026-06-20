@@ -256,7 +256,15 @@ class EvoGatewayApp:
             params = await gwy.params() if gwy.tcs is None else await gwy.tcs.params()
             status = await gwy.status() if gwy.tcs is None else await gwy.tcs.status()
             known_list = gwy.config.known_list
+            cfg = gwy.config
+            config = {
+                "disable_discovery": cfg.disable_discovery,
+                "enable_eavesdrop": cfg.enable_eavesdrop,
+                "max_zones": cfg.max_zones,
+                "reduce_processing": cfg.reduce_processing,
+            }
 
+            self.mqtt.publish(f"{base}/config", json.dumps(config, sort_keys=True))
             self.mqtt.publish(f"{base}/schema_full", json.dumps(full_schema, default=str, sort_keys=True))
             self.mqtt.publish(f"{base}/schema_tcs", json.dumps(tcs_schema, default=str, sort_keys=True))
             self.mqtt.publish(f"{base}/params", json.dumps(params, default=str, sort_keys=True))
