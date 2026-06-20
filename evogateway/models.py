@@ -413,5 +413,5 @@ class ParsedMessage:
                 zone_name_snake = to_snake_case(self.zone_name).lower()
                 top = f"{zones_root_topic}/{zone_name_snake}" if zones_root_topic else zone_name_snake
 
-        return f”{top}/{device_path_snake}/{code_snake}”
+        return f"{top}/{device_path_snake}/{code_snake}"
 
