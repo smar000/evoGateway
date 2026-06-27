@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import datetime as _dt
 import os
+import signal
 import sys
 from typing import TYPE_CHECKING, Any
 import json
@@ -336,8 +337,14 @@ class EvoGatewayApp:
         schema = {**live_schema, **known_list}
         return schema
 
+    def _handle_sigterm(self) -> None:
+        self._shutdown_reason = "terminated (SIGTERM)"
+        if self._heartbeat_task and not self._heartbeat_task.done():
+            self._heartbeat_task.cancel()
+
     async def run(self) -> None:
         self.loop = asyncio.get_running_loop()
+        self.loop.add_signal_handler(signal.SIGTERM, self._handle_sigterm)
 
         # MQTT (threaded)
         self.mqtt = MQTTService(
@@ -447,15 +454,26 @@ class EvoGatewayApp:
 
         except KeyboardInterrupt:
             self._shutdown_reason = self._shutdown_reason or "keyboard interrupt"
-        except (SystemExit, asyncio.CancelledError):
-            pass  # reason already logged/set by the triggering code path
+        except asyncio.CancelledError:
+            # Either SIGTERM handler cancelled the task, or watchdog/MQTT command did.
+            # _shutdown_reason will already be set by whichever code path triggered it.
+            self._shutdown_reason = self._shutdown_reason or "cancelled (unknown reason)"
+        except SystemExit:
+            pass  # reason already set by the triggering code path
         except Exception as ex:
             self._shutdown_reason = self._shutdown_reason or f"unhandled error: {ex}"
             self.log.exception("Unhandled error in main loop")
 
         finally:
             _sep = "=" * 80
-            _stop_label = "restarting" if self._restart_process else "stopping"
+            if self._restart_process:
+                _stop_label = "restarting"
+            elif self._shutdown_reason in ("keyboard interrupt",) or self._shutdown_reason.startswith("MQTT command:"):
+                _stop_label = "stopping (graceful)"
+            elif self._shutdown_reason:
+                _stop_label = "stopping"
+            else:
+                _stop_label = "stopping"
             _stop_reason = f" — {self._shutdown_reason}" if self._shutdown_reason else ""
             _stop_msg = f"evoGateway {_stop_label}{_stop_reason}"
             print("")
