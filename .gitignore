@@ -52,3 +52,6 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
+# Local agent notes (not shared via repo)
+CLAUDE.md
