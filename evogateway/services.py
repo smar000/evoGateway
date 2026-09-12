@@ -31,7 +31,46 @@ from ramses_tx.exceptions import RamsesException
 from ramses_rf.protocol_schema import CODES_SCHEMA as _CODES_SCHEMA
 CODE_NAMES = {code: entry["name"] for code, entry in _CODES_SCHEMA.items() if "name" in entry}
 RamsesMessage._GET_CODE_NAME_CB = lambda code: CODE_NAMES.get(code, f"unknown_{code}")
-from ramses_rf.exceptions import ExpiredCallbackError 
+from ramses_rf.exceptions import ExpiredCallbackError
+
+# ramses_rf 0.57.1 bug workaround: ScheduleSync._schedule_version() compares
+# self._msg_0006.dtm (can be timezone-aware, e.g. once round-tripped through
+# PacketDTO) against a bare dt.now() (naive), raising "can't compare
+# offset-naive and offset-aware datetimes" for any get_schedule call once a
+# recent 0006 message is cached (periodic discovery re-polls it every 5 min).
+# This breaks essentially all schedule fetches for a zone once it's been
+# fetched once, not just forced/repeat ones. Not fixable in our own code —
+# lives in the pinned dependency — so patched here, applied once at import.
+try:
+    from ramses_rf.systems.tcs import ScheduleSync as _ScheduleSync
+    from ramses_rf.const import SZ_CHANGE_COUNTER as _SZ_CHANGE_COUNTER
+
+    async def _tz_safe_schedule_version(self, *, force_io: bool = False):
+        msg_dtm = self._msg_0006.dtm if self._msg_0006 else None
+        if msg_dtm is not None and msg_dtm.tzinfo is not None:
+            msg_dtm = msg_dtm.astimezone().replace(tzinfo=None)  # -> naive local time
+
+        if (
+            not force_io
+            and self._msg_0006
+            and msg_dtm > _dt.datetime.now() - _dt.timedelta(minutes=3)
+        ):
+            return self._msg_0006.payload[_SZ_CHANGE_COUNTER], False  # global_ver, did_io
+
+        cmd = Command.get_schedule_version(self.ctl.id)
+        pkt = await self._gwy.async_send_cmd(cmd, wait_for_reply=True, priority=Priority.HIGH)
+        if pkt:
+            self._msg_0006 = RamsesMessage._from_pkt(pkt)
+        return self._msg_0006.payload[_SZ_CHANGE_COUNTER], True  # global_ver, did_io
+
+    _ScheduleSync._schedule_version = _tz_safe_schedule_version
+except Exception:
+    logging.getLogger(__name__).warning(
+        "Could not apply ramses_rf ScheduleSync._schedule_version tz-safety patch "
+        "(ramses_rf internals may have changed) — forced/repeat schedule fetches "
+        "may fail with a naive/aware datetime comparison error.",
+        exc_info=True,
+    )
 
 from .registry import DeviceRegistry
 
