@@ -828,7 +828,10 @@ class ScheduleHandler:
             return
         gwy = self.ramses.gwy
         ctl_id = gwy.tcs.id if gwy and getattr(gwy, "tcs", None) else None
-        ctl_type = gwy.get_device(ctl_id).type if ctl_id else "01"
+        # gwy.get_device() was removed in the ramses_rf 0.57.x migration;
+        # use device_registry.device_by_id instead (see other call sites in this file).
+        ctl_dev = gwy.device_registry.device_by_id.get(ctl_id) if ctl_id else None
+        ctl_type = ctl_dev.type if ctl_dev else "01"
 
         fake_msg = make_fake_ramses_message(
             "zone_schedule", ctl_id, ctl_type, zone,
